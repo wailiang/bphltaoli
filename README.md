@@ -1,297 +1,210 @@
-# 资金费率套利机器人
+# 加密货币资金费率套利机器人
 
-自动监控Backpack和Hyperliquid交易所的资金费率差异，执行跨交易所资金费率套利策略。
+## 项目概述
 
-## 功能特点
+这是一个专业的加密货币资金费率套利机器人，专注于利用不同交易所之间的资金费率差异进行套利交易。目前支持Hyperliquid和Backpack两个交易所，通过实时监控资金费率和价格差异，自动执行套利策略。
 
-- 实时监控多个交易对的资金费率和价格
-- 自动执行资金费率套利策略：在资金费率高的交易所做多，在资金费率低的交易所做空
-- 当资金费率差异符号反转时自动平仓获利
-- 支持自定义开仓阈值和仓位大小
-- 完整的日志记录和仓位管理
-- 异常处理和自动重连机制
+### 核心特点
 
-参数的设定 请阅读推特发布的视频
-https://x.com/gch_enbsbxbs/status/1909239871220461652
+- **多交易所支持**：同时连接Hyperliquid和Backpack交易所
+- **实时监控**：持续监控资金费率和价格差异
+- **智能套利**：基于预设条件自动执行套利交易
+- **风险控制**：完善的仓位管理和风险控制机制
+- **滑点控制**：智能分析订单深度，控制交易滑点
+- **详细日志**：完整的交易记录和操作日志
 
+## 系统架构
 
-## 安装
+### 目录结构
+```
+funding_arbitrage_bot/
+├── core/                    # 核心功能模块
+│   ├── arbitrage_engine.py  # 套利引擎
+│   ├── exchange.py         # 交易所接口
+│   └── risk_manager.py     # 风险管理
+├── utils/                   # 工具函数
+│   ├── logger.py           # 日志工具
+│   └── helpers.py          # 辅助函数
+├── config.yaml             # 配置文件
+└── main.py                 # 主程序入口
+```
 
-1. 克隆仓库
+### 核心模块说明
+
+1. **套利引擎 (arbitrage_engine.py)**
+   - 实现套利策略逻辑
+   - 管理交易执行
+   - 处理开平仓条件
+   - 计算套利机会
+
+2. **交易所接口 (exchange.py)**
+   - 封装交易所API
+   - 处理订单管理
+   - 获取市场数据
+   - 执行交易操作
+
+3. **风险管理 (risk_manager.py)**
+   - 仓位控制
+   - 风险限制
+   - 资金管理
+   - 止损策略
+
+## 安装指南
+
+### 环境要求
+- Python 3.8+
+- 操作系统：Windows/Linux/MacOS
+
+### 安装步骤
+
+1. **克隆仓库**
 ```bash
-git clone <repository-url>
+git clone https://github.com/yourusername/funding-arbitrage-bot.git
 cd funding-arbitrage-bot
 ```
 
-2. 安装依赖
+2. **安装依赖**
 ```bash
 pip install -r requirements.txt
 ```
 
-3. 配置交易所API密钥
-编辑`config.yaml`文件，设置你的API密钥：
+3. **配置API密钥**
+在`config.yaml`中配置交易所API密钥：
 ```yaml
 exchanges:
-  backpack:
-    api_key: "YOUR_BACKPACK_API_KEY"
-    api_secret: "YOUR_BACKPACK_API_SECRET"
   hyperliquid:
-    api_key: "YOUR_HYPERLIQUID_API_KEY_OR_ADDRESS" 
-    api_secret: "YOUR_HYPERLIQUID_API_SECRET_OR_PRIVATE_KEY"
+    api_key: "你的Hyperliquid钱包地址"
+    api_secret: "你的Hyperliquid私钥"
+  backpack:
+    api_key: "你的Backpack API密钥"
+    api_secret: "你的Backpack API密钥"
 ```
 
-## 使用方法
+## 配置说明
 
-1. 启动机器人
+### 基础配置
+```yaml
+strategy:
+  # 基本参数
+  min_funding_diff: 0.01    # 最小资金费率差异(1%)
+  min_price_diff_pct: 0.001 # 最小价格差异(0.1%)
+  
+  # 交易参数
+  trade_size_usd: 100      # 单笔交易金额(美元)
+  max_position_usd: 500    # 最大仓位(美元)
+  trade_cooldown: 3600     # 交易冷却时间(秒)
+```
+
+### 开仓条件
+```yaml
+open_conditions:
+  condition_type: "funding_only"  # 条件类型
+  min_funding_diff: 0.01         # 最小资金费率差异
+  min_price_diff_percent: 0.2    # 最小价格差异
+  max_slippage_percent: 0.15     # 最大允许滑点
+  ignore_high_slippage: false    # 是否忽略高滑点
+```
+
+### 平仓条件
+```yaml
+close_conditions:
+  condition_type: "any"          # 条件类型
+  funding_diff_sign_change: true # 资金费率符号变化时平仓
+  min_funding_diff: 0.005       # 最小资金费率差异
+  min_profit_percent: 0.1       # 最小利润百分比
+  max_loss_percent: 0.3         # 最大损失百分比
+```
+
+## 运行指南
+
+### 启动程序
 ```bash
 python run_bot.py
 ```
 
-2. 使用自定义配置文件
+### 测试模式
 ```bash
-python main.py --config your_config.yaml
+python run_bot.py --test
 ```
 
-3. 模拟运行模式（不实际下单）
+### 指定配置文件
 ```bash
-python main.py --dry-run
+python run_bot.py --config path/to/config.yaml
 ```
-
-## 配置选项
-
-在`config.yaml`中配置策略参数：
-
-```yaml
-strategy:
-  symbols: ["BTC", "ETH", "SOL"] # 监控的基础币种列表
-  max_positions_count: 5 # 全局持仓数量限制，最多同时持有的不同币种数量
-  min_funding_diff: 0.000001 # 最小资金费率差阈值
-  min_price_diff_percent: 0.000001 # 最小价格差阈值（百分比）
-  position_sizes: # 每个币种的单次开仓数量
-    BTC: 0.001  # BTC开仓数量
-    ETH: 0.01   # ETH开仓数量
-    SOL: 0.1    # SOL开仓数量
-  max_total_position_usd: 150 # 所有币种的总开仓金额上限（美元）
-  check_interval: 5 # 检查套利机会的时间间隔 (秒)
-  funding_update_interval: 60 # 更新资金费率的时间间隔 (秒)
-
-# 交易对配置
-trading_pairs:
-  - symbol: "BTC"
-    min_volume: 0.001
-    price_precision: 1 # BTC价格精度：1位小数
-    size_precision: 3
-    max_position_size: 0.001  # BTC最大持仓数量
-  - symbol: "ETH"
-    min_volume: 0.01
-    price_precision: 2
-    size_precision: 2 # ETH数量精度：2位小数
-    max_position_size: 0.01  # ETH最大持仓数量
-  - symbol: "SOL"
-    min_volume: 0.1
-    price_precision: 3
-    size_precision: 2 # SOL数量精度：2位小数
-    max_position_size: 0.1  # SOL最大持仓数量
-```
-
-## 注意事项
-
-- 请使用小额资金进行测试
-- 确保网络稳定，因为套利策略需要同时在两个交易所下单
-- 请了解资金费率套利的风险，包括但不限于价格波动风险、流动性风险等
 
 ## 风险控制
 
-机器人内置了多项风险控制机制，帮助您限制潜在的风险：
+### 仓位管理
+- 单个币种最大仓位限制
+- 总体仓位限制
+- 动态仓位调整
 
-1. **全局持仓数量限制**：通过`strategy.max_positions_count`配置项限制同时最多持有的不同币种数量。例如，设置为5时，即使更多币种满足开仓条件，也最多只持有5个不同币种的仓位。这有助于：
-   - 防止资金过度分散
-   - 控制整体风险敞口
-   - 在市场波动时限制潜在的亏损
+### 滑点控制
+- 订单深度分析
+- 滑点预估
+- 动态滑点限制
 
-2. **单币种持仓限制**：每个币种都有`max_position_size`设置，限制单一币种的最大持仓量。
+### 止损机制
+- 固定止损
+- 追踪止损
+- 时间止损
 
-3. **价格差异过滤**：通过`min_price_diff_percent`和`max_price_diff_percent`过滤异常的价格数据，避免在错误数据基础上开仓。
+## 日志系统
 
-合理设置这些参数可以有效控制套利策略的风险。
+### 日志级别
+- DEBUG: 调试信息
+- INFO: 一般信息
+- WARNING: 警告信息
+- ERROR: 错误信息
 
-## 项目结构
+### 日志内容
+- 交易执行记录
+- 资金费率变化
+- 套利机会分析
+- 错误和异常信息
 
-```
-funding_arbitrage_bot/
-├── main.py                  # 主程序入口
-├── config.yaml              # 配置文件
-├── requirements.txt         # Python依赖
-├── README.md                # 项目说明文档
-├── exchanges/               # 交易所API封装
-│   ├── backpack_api.py      # Backpack交易所API
-│   └── hyperliquid_api.py   # Hyperliquid交易所API
-├── core/                    # 核心逻辑
-│   ├── arbitrage_engine.py  # 套利引擎
-│   ├── data_manager.py      # 数据管理
-│   └── position_manager.py  # 仓位管理
-└── utils/                   # 工具函数
-    ├── logger.py            # 日志工具
-    └── helpers.py           # 辅助函数
-```
+## 常见问题
 
-# Hyperliquid API 修复说明
+1. **如何处理API连接失败？**
+   - 检查网络连接
+   - 验证API密钥
+   - 查看错误日志
 
-## 问题
+2. **如何优化套利策略？**
+   - 调整资金费率差异阈值
+   - 优化开平仓条件
+   - 调整交易金额
 
-在使用自建的Hyperliquid SDK时，发现以下问题：
+3. **如何处理高滑点情况？**
+   - 增加最小流动性要求
+   - 调整最大滑点限制
+   - 使用限价单替代市价单
 
-1. API请求格式不正确
-2. 身份验证签名方式不正确
-3. 参数类型问题（浮点数vs字符串）
-4. 资金费率获取失败，显示为0
+## 更新日志
 
-## 解决方案
+### 2025-04-09
+- 优化界面排序
+- 改进滑点控制
+- 增加资金费率符号变化检测
 
-我们采用了以下解决方案：
+### 2025-04-08
+- 添加新的平仓条件
+- 优化风险管理
+- 改进日志系统
 
-1. 使用官方SDK代替自己实现的SDK
-2. 修改了API代码，使其正确调用官方SDK
-3. 确保所有参数使用正确的格式和类型
-4. 直接使用REST API获取资金费率数据
+## 贡献指南
 
-## 具体修改
+欢迎提交Issue和Pull Request来帮助改进项目。在提交代码前，请确保：
+1. 代码符合PEP 8规范
+2. 添加适当的测试
+3. 更新相关文档
 
-1. 添加了对官方SDK的支持：
-   ```python
-   from hyperliquid.exchange import Exchange
-   from eth_account import Account
-   
-   # 创建钱包对象
-   wallet = Account.from_key(private_key)
-   
-   # 初始化Exchange
-   exchange = Exchange(wallet=wallet)
-   
-   # 下单
-   order_response = exchange.order(
-       coin=symbol,
-       is_buy=is_buy,
-       sz=size,
-       limit_px=price,
-       order_type="Limit"  # 限价单
-   )
-   ```
+## 许可证
 
-2. 修复了REST API的使用方式：
-   ```python
-   # 获取持仓信息
-   url = f"{self.base_url}/info"
-   payload = {
-       "type": "clearinghouseState",
-       "user": self.hyperliquid_address
-   }
-   response = await self.http_client.post(url, json=payload)
-   ```
+本项目采用MIT许可证。详见LICENSE文件。
 
-3. 修复资金费率获取：
-   ```python
-   # 获取资金费率
-   url = f"{self.base_url}/info"
-   payload = {"type": "metaAndAssetCtxs"}
-   
-   response = await self.http_client.post(url, json=payload)
-   data = response.json()
-   
-   # 解析资金费率
-   if isinstance(data, list) and len(data) >= 2:
-       universe_data = data[0]
-       asset_ctxs = data[1]
-       
-       # 查找特定币种
-       for i, coin_data in enumerate(universe_data.get("universe", [])):
-           if coin_data.get("name") == symbol:
-               coin_ctx = asset_ctxs[i]
-               if "funding" in coin_ctx:
-                   funding_rate = float(coin_ctx["funding"])
-                   return funding_rate
-   ```
+## 联系方式
 
-4. 创建了测试脚本验证功能：
-   - `test_order.py`: 使用官方SDK直接下单测试
-   - `test_hl_api.py`: 通过自己的API接口下单测试
-   - `test_funding_rate.py`: 验证资金费率获取功能
-
-## 注意事项
-
-1. Hyperliquid只支持限价单，不支持市价单
-2. 下单时需要注意价格精度和数量精度
-3. 钱包地址必须与私钥匹配
-4. 为了避免意外成交，测试时将价格设置为市场价格的95%（买入）或105%（卖出）
-5. 资金费率通过直接调用REST API获取，避免SDK中可能存在的问题
-
-## API使用方式
-
-```python
-# 初始化API
-api = HyperliquidAPI(
-    api_key=wallet_address,   # 钱包地址
-    api_secret=private_key,   # 钱包私钥
-    logger=logger,
-    config=config
-)
-
-# 下限价单
-order_result = await api.place_order(
-    symbol="SOL",
-    side="BUY",
-    size=0.01,
-    price=current_price*0.95,  # 买入价格比市场价低5%
-    order_type="LIMIT"
-)
-
-# 获取持仓
-positions = await api.get_positions()
-
-# 获取资金费率
-funding_rate = await api.get_funding_rate("BTC")
-
-# 平仓
-await api.close_position(symbol="SOL")
-```
-
-# 资金费率获取修复总结
-
-我们已经成功修复了Hyperliquid资金费率获取功能，现在可以正确获取各个交易对的资金费率数据。
-
-## 问题原因
-
-1. 原代码尝试使用官方SDK的`meta_and_asset_ctx`方法获取资金费率，但该方法在当前版本的SDK中不存在
-2. REST API请求格式不正确，导致无法获取资金费率数据
-3. 对资金费率数据的解析逻辑存在问题
-
-## 解决方案
-
-1. 移除对不存在的SDK方法的调用
-2. 采用直接的REST API请求获取资金费率数据
-3. 正确解析API响应，提取资金费率信息
-4. 增加详细的错误处理和日志记录
-
-## 修复验证
-
-我们创建了专门的测试脚本（`test_funding_rate.py`和`test_detailed_funding.py`）来验证资金费率获取功能：
-
-1. 直接使用REST API获取资金费率
-2. 通过修改后的`HyperliquidAPI`类获取资金费率
-3. 对比两种方法获取的结果，确保一致性
-
-测试结果显示，修复后的代码可以正确获取Hyperliquid的资金费率数据，不再出现获取失败或返回0的情况。现在资金费率可以用于套利策略的计算。
-
-## 示例资金费率数据
-
-以下是部分交易对当前的资金费率数据（测试时间：2025-04-06）：
-
-| 币种 | 每小时费率 | 8小时费率 | 24小时费率 |
-|------|-----------|-----------|-----------|
-| BTC  | 0.001250% | 0.010000% | 0.030000% |
-| ETH  | -0.000611% | -0.004888% | -0.014664% |
-| SOL  | -0.002420% | -0.019357% | -0.058072% |
-| AVAX | -0.004687% | -0.037495% | -0.112484% |
-| LINK | -0.001299% | -0.010394% | -0.031181% |
-
-请注意，资金费率为正值表示做多需要支付资金费用，做空可以获得资金费用；为负值表示做空需要支付费用，做多可以获得资金费用。套利策略应利用这些差异进行交易。 
+如有问题或建议，请通过以下方式联系：
+- 提交Issue
+- 发送邮件至：your.email@example.com 
