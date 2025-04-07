@@ -11,6 +11,10 @@
 - 完整的日志记录和仓位管理
 - 异常处理和自动重连机制
 
+参数的设定 请阅读推特发布的视频
+https://x.com/gch_enbsbxbs/status/1909239871220461652
+
+
 ## 安装
 
 1. 克隆仓库
@@ -40,7 +44,7 @@ exchanges:
 
 1. 启动机器人
 ```bash
-python main.py
+python run_bot.py
 ```
 
 2. 使用自定义配置文件
