@@ -56,7 +56,7 @@ except ImportError:
 
 class ArbitrageEngine:
     """套利引擎类，负责执行套利策略"""
-    
+
     def __init__(
         self,
         config: Dict[str, Any],
@@ -66,7 +66,7 @@ class ArbitrageEngine:
     ):
         """
         初始化套利引擎
-        
+
         Args:
             config: 配置字典
             backpack_api: Backpack API实例
@@ -75,11 +75,11 @@ class ArbitrageEngine:
         """
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
-        
+
         # 初始化API实例
         self.backpack_api = backpack_api
         self.hyperliquid_api = hyperliquid_api
-        
+
         # 初始化数据管理器
         self.data_manager = DataManager(
             backpack_api=backpack_api,
@@ -87,40 +87,40 @@ class ArbitrageEngine:
             symbols=config["strategy"]["symbols"],
             funding_update_interval=config["strategy"]["funding_update_interval"],
             logger=self.logger)
-        
+
         # 先不初始化显示管理器，等start方法中再初始化
         self.display_manager = None
-        
+
         # 设置策略参数
         strategy_config = config["strategy"]
         open_conditions = strategy_config.get("open_conditions", {})
         close_conditions = strategy_config.get("close_conditions", {})
-        
+
         # 从open_conditions中获取min_funding_diff（新配置结构）
         self.arb_threshold = open_conditions.get("min_funding_diff", 0.00001)
-        
+
         # 如果open_conditions不存在或min_funding_diff不在其中，尝试从旧的配置结构获取
         if self.arb_threshold == 0.00001 and "min_funding_diff" in strategy_config:
             self.arb_threshold = strategy_config["min_funding_diff"]
             self.logger.warning("使用旧配置结构中的min_funding_diff参数")
-        
+
         self.position_sizes = strategy_config.get("position_sizes", {})
         self.max_position_time = close_conditions.get(
             "max_position_time", 28800)  # 默认8小时
         self.trading_pairs = strategy_config.get("trading_pairs", [])
-        
+
         # 价差参数 - 从新配置结构获取
         self.min_price_diff_percent = open_conditions.get(
             "min_price_diff_percent", 0.2)
         self.max_price_diff_percent = open_conditions.get(
             "max_price_diff_percent", 1.0)
-        
+
         # 获取开仓和平仓条件类型
         self.open_condition_type = open_conditions.get(
             "condition_type", "funding_only")
         self.close_condition_type = close_conditions.get(
             "condition_type", "any")
-        
+
         # 平仓条件参数
         self.funding_diff_sign_change = close_conditions.get(
             "funding_diff_sign_change", True)
@@ -129,16 +129,16 @@ class ArbitrageEngine:
         self.max_loss_percent = close_conditions.get("max_loss_percent", 0.3)
         self.close_min_funding_diff = close_conditions.get(
             "min_funding_diff", self.arb_threshold / 2)
-        
+
         # 初始化价格和资金费率数据
         self.prices = {}
         self.funding_rates = {}
         self.positions = {}
         self.positions_lock = asyncio.Lock()
-        
+
         # 初始化交易对映射
         self.symbol_mapping = {}
-        
+
         # 资金费率符号记录文件路径
         self.funding_signs_file = os.path.join(
             os.path.dirname(
@@ -148,25 +148,46 @@ class ArbitrageEngine:
             'data',
             'funding_diff_signs.json'
         )
-        
+
         # 确保data目录存在
         os.makedirs(os.path.dirname(self.funding_signs_file), exist_ok=True)
-        
+
         # 添加开仓时的资金费率符号记录 - 从文件加载
         self.funding_diff_signs = self._load_funding_diff_signs()
         self.logger.info(f"从文件加载资金费率符号记录: {self.funding_diff_signs}")
-        
+
+        # 新增：持仓方向记录字典
+        self.position_directions = {}
+
+        # 新增：开仓时的资金费率和价格记录
+        self.entry_funding_rates = {}
+        self.entry_prices = {}
+
+        # 新增：开仓时间记录
+        self.position_open_times = {}
+
+        # 新增：交易快照文件路径
+        self.snapshots_dir = os.path.join(
+            os.path.dirname(
+                os.path.dirname(
+                    os.path.dirname(
+                        os.path.abspath(__file__)))),
+            'data',
+            'positions'
+        )
+        os.makedirs(self.snapshots_dir, exist_ok=True)
+
         # 初始化事件循环和任务列表
         self.loop = asyncio.get_event_loop()
         self.tasks = []
-        
+
         # 获取更新间隔
         update_intervals = strategy_config.get("update_intervals", {})
         self.price_update_interval = update_intervals.get("price", 1)
         self.funding_update_interval = update_intervals.get("funding", 60)
         self.position_update_interval = update_intervals.get("position", 10)
         self.check_interval = update_intervals.get("check", 5)
-        
+
         # 初始化统计数据
         self.stats = {
             "total_trades": 0,
@@ -179,7 +200,7 @@ class ArbitrageEngine:
 
         # 初始化停止事件
         self.stop_event = asyncio.Event()
-        
+
         # 打印配置摘要
         self.logger.info(f"套利引擎初始化完成，套利阈值: {self.arb_threshold}")
         self.logger.info(f"交易对: {self.trading_pairs}")
@@ -187,16 +208,16 @@ class ArbitrageEngine:
             f"价差参数 - 最小: {self.min_price_diff_percent}%, 最大: {self.max_price_diff_percent}%")
         self.logger.info(
             f"开仓条件类型: {self.open_condition_type}, 平仓条件类型: {self.close_condition_type}")
-        
+
         # 持仓同步参数
         self.position_sync_interval = config.get(
             "strategy", {}).get(
             "position_sync_interval", 300)  # 默认5分钟同步一次
         self.last_sync_time = 0
-        
+
         # 运行标志
         self.is_running = False
-        
+
         # 初始化报警管理器
         order_hook_url = config.get(
             "notification", {}).get("order_webhook_url")
@@ -206,26 +227,11 @@ class ArbitrageEngine:
         else:
             self.alerter = None
             self.logger.info("未配置订单通知")
-        
-        # 添加开仓方向记录字典
-        self.position_directions = {}  # 记录每个币种的开仓方向
-        
-        # 初始化交易快照记录功能
-        self.trades_dir = os.path.join(
-            os.path.dirname(
-                os.path.dirname(
-                    os.path.dirname(
-                        os.path.abspath(__file__)))),
-            'data',
-            'trades'
-        )
-        # 确保trades目录存在
-        os.makedirs(self.trades_dir, exist_ok=True)
 
     def _load_funding_diff_signs(self) -> Dict[str, int]:
         """
         从文件加载资金费率符号记录
-        
+
         Returns:
             Dict[str, int]: 资金费率符号记录字典
         """
@@ -241,103 +247,83 @@ class ArbitrageEngine:
         except Exception as e:
             self.logger.error(f"加载资金费率符号记录文件失败: {e}")
             return {}
-            
+
     def _save_funding_diff_signs(self) -> None:
-        """保存资金费率符号记录到文件"""
+        """
+        将资金费率符号记录保存到文件
+        """
         try:
             with open(self.funding_signs_file, 'w') as f:
                 json.dump(self.funding_diff_signs, f)
+            self.logger.debug(f"资金费率符号记录已保存到文件: {self.funding_signs_file}")
         except Exception as e:
-            self.logger.error(f"保存资金费率符号记录失败: {e}")
-
-    def record_position_direction(self, symbol: str, bp_position: dict, hl_position: dict) -> None:
+            self.logger.error(f"保存资金费率符号记录到文件失败: {e}")
+    
+    def _save_position_snapshot(self, symbol, action, bp_position, hl_position, bp_price, hl_price, bp_funding, hl_funding):
         """
-        记录开仓方向
+        保存开仓或平仓快照到文件
         
         Args:
-            symbol: 币种符号
-            bp_position: Backpack持仓信息
-            hl_position: Hyperliquid持仓信息
-        """
-        if bp_position and hl_position:
-            self.position_directions[symbol] = {
-                "bp_side": bp_position.get("side"),
-                "hl_side": hl_position.get("side"),
-                "time": time.time()
-            }
-            self.logger.info(f"{symbol} - 记录开仓方向: BP={bp_position.get('side')}, HL={hl_position.get('side')}")
-
-    def clear_position_direction(self, symbol: str) -> None:
-        """
-        清除开仓方向记录
-        
-        Args:
-            symbol: 币种符号
-        """
-        if symbol in self.position_directions:
-            direction = self.position_directions.pop(symbol)
-            self.logger.info(f"{symbol} - 清除开仓方向记录: BP={direction['bp_side']}, HL={direction['hl_side']}")
-
-    def save_trade_snapshot(self, symbol: str, action: str, bp_position=None, hl_position=None) -> None:
-        """
-        保存交易快照到文件
-        
-        Args:
-            symbol: 交易币种
-            action: 动作类型，"open"或"close"
-            bp_position: Backpack持仓信息
-            hl_position: Hyperliquid持仓信息
+            symbol: 币种
+            action: 操作类型，"open"或"close"
+            bp_position: BP持仓信息
+            hl_position: HL持仓信息
+            bp_price: BP价格
+            hl_price: HL价格
+            bp_funding: BP资金费率
+            hl_funding: HL资金费率
         """
         try:
-            # 获取最新市场数据
-            market_data = self.data_manager.get_data(symbol)
+            # 准备快照数据
+            timestamp = time.time()
+            formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+            price_diff = bp_price - hl_price
+            price_diff_percent = (price_diff / hl_price) * 100 if hl_price != 0 else 0
+            funding_diff = bp_funding - hl_funding
             
-            # 创建快照数据
+            # 获取持仓方向
+            bp_side = bp_position.get("side", "UNKNOWN") if bp_position else "UNKNOWN"
+            hl_side = hl_position.get("side", "UNKNOWN") if hl_position else "UNKNOWN"
+            
+            # 获取持仓数量
+            bp_size = bp_position.get("size", 0) if bp_position else 0
+            if "quantity" in bp_position and not bp_size:
+                bp_size = bp_position.get("quantity", 0)
+            hl_size = hl_position.get("size", 0) if hl_position else 0
+            
             snapshot = {
                 "symbol": symbol,
                 "action": action,
-                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "timestamp": time.time(),
-                "bp_price": market_data.get("bp_price", 0),
-                "hl_price": market_data.get("hl_price", 0),
-                "price_diff": market_data.get("price_diff", 0),
-                "price_diff_percent": market_data.get("price_diff_percent", 0),
-                "bp_funding": market_data.get("bp_funding", 0),
-                "hl_funding": market_data.get("adjusted_hl_funding", 0), 
-                "funding_diff": market_data.get("funding_diff", 0)
+                "timestamp": timestamp,
+                "formatted_time": formatted_time,
+                "bp_side": bp_side,
+                "hl_side": hl_side,
+                "bp_size": bp_size,
+                "hl_size": hl_size,
+                "bp_price": bp_price,
+                "hl_price": hl_price,
+                "price_diff": price_diff,
+                "price_diff_percent": price_diff_percent,
+                "bp_funding": bp_funding,
+                "hl_funding": hl_funding,
+                "funding_diff": funding_diff
             }
             
-            # 添加持仓信息（如果提供）
-            if bp_position and hl_position:
-                snapshot.update({
-                    "bp_side": bp_position.get("side", ""),
-                    "hl_side": hl_position.get("side", ""),
-                    "bp_size": bp_position.get("size", 0),
-                    "hl_size": hl_position.get("size", 0)
-                })
-            
-            # 添加持仓时间（如果是平仓）
-            if action == "close" and symbol in self.position_directions:
-                open_time = self.position_directions[symbol].get("time", 0)
-                close_time = time.time()
-                holding_time = close_time - open_time
-                snapshot["holding_time_seconds"] = holding_time
-                snapshot["holding_time"] = str(datetime.timedelta(seconds=int(holding_time)))
-            
             # 保存到文件
-            filename = os.path.join(self.trades_dir, f"{symbol}_trades.jsonl")
-            with open(filename, "a") as f:
-                f.write(json.dumps(snapshot) + "\n")
+            filename = f"{self.snapshots_dir}/{symbol}_{action}_{int(timestamp)}.json"
+            with open(filename, "w") as f:
+                json.dump(snapshot, f, indent=2)
                 
-            self.logger.info(f"{symbol} - 保存{action}交易快照到文件")
+            self.logger.info(f"{symbol} - 已保存{action}快照到文件: {filename}")
+                
         except Exception as e:
-            self.logger.error(f"{symbol} - 保存交易快照失败: {str(e)}")
+            self.logger.error(f"{symbol} - 保存{action}快照失败: {str(e)}")
 
     async def start(self):
         """启动套利引擎"""
         try:
             self.logger.info("正在启动套利引擎...")
-            
+
             # 添加调试输出
             print("==== 套利引擎启动 ====", file=sys.__stdout__)
             print(
@@ -346,10 +332,10 @@ class ArbitrageEngine:
             print(
                 f"交易对: {self.config.get('strategy', {}).get('symbols', [])}",
                 file=sys.__stdout__)
-            
+
             # 初始化显示管理器
             print("正在初始化显示管理器...", file=sys.__stdout__)
-            
+
             # 确保导入了DisplayManager
             try:
                 from funding_arbitrage_bot.utils.display_manager import DisplayManager
@@ -359,47 +345,50 @@ class ArbitrageEngine:
                 except ImportError:
                     print("无法导入DisplayManager", file=sys.__stdout__)
                     raise
-            
+
             # 创建并启动显示管理器
             self.display_manager = DisplayManager(logger=self.logger)
             print("正在启动显示...", file=sys.__stdout__)
             self.display_manager.start()
             print("显示已启动", file=sys.__stdout__)
-            
+
             # 启动数据流
             await self.data_manager.start_price_feeds()
-            
+
             # 设置运行标志
             self.is_running = True
-            
+
             # 开始主循环
             while self.is_running:
                 try:
                     # 更新市场数据显示
                     market_data = self.data_manager.get_all_data()
-                    
+
                     # 获取当前持仓信息
                     bp_positions = await self.backpack_api.get_positions()
                     hl_positions = await self.hyperliquid_api.get_positions()
-                    
+
                     # 添加持仓信息到市场数据中，以便在表格中显示
                     for symbol in market_data:
                         bp_symbol = get_backpack_symbol(symbol)
-                        has_position = (bp_symbol in bp_positions) or (symbol in hl_positions)
+                        has_position = (
+                            bp_symbol in bp_positions) or (
+                            symbol in hl_positions)
                         market_data[symbol]["position"] = has_position
-                    
+
                     # 更新持仓方向信息
-                    market_data = self._update_position_direction_info(market_data, bp_positions, hl_positions)
-                    
+                    market_data = self._update_position_direction_info(
+                        market_data, bp_positions, hl_positions)
+
                     # 使用直接的系统输出检查数据
                     print(f"更新市场数据: {len(market_data)}项", file=sys.__stdout__)
-                    
+
                     # 更新显示
                     if self.display_manager:
                         self.display_manager.update_market_data(market_data)
                     else:
                         print("显示管理器未初始化", file=sys.__stdout__)
-                    
+
                     # ===== 批量处理模式 =====
                     # 收集需要开仓和平仓的币种
                     open_candidates = []   # 存储满足开仓条件的币种信息
@@ -449,15 +438,15 @@ class ArbitrageEngine:
                             except Exception as e:
                                 self.logger.error(
                                     f"执行{candidate['symbol']}批量平仓时出错: {e}")
-                        
+
                     # 等待下一次检查
                     await asyncio.sleep(self.config["strategy"]["check_interval"])
-                    
+
                 except Exception as e:
                     self.logger.error(f"主循环发生错误: {e}")
                     print(f"主循环错误: {e}", file=sys.__stdout__)
                     await asyncio.sleep(5)  # 发生错误时等待5秒
-                    
+
         except Exception as e:
             self.logger.error(f"启动套利引擎时发生错误: {e}")
             print(f"启动引擎错误: {str(e)}", file=sys.__stdout__)
@@ -467,7 +456,7 @@ class ArbitrageEngine:
                 print("停止显示...", file=sys.__stdout__)
                 self.display_manager.stop()
                 print("显示已停止", file=sys.__stdout__)
-            
+
     def _analyze_orderbook(self, orderbook, side, amount_usd, price):
         """
         分析订单簿计算滑点
@@ -643,7 +632,7 @@ class ArbitrageEngine:
     ):
         """
         收集套利机会，但不立即执行，而是将满足条件的币种添加到候选列表中
-        
+
         Args:
             symbol: 基础币种，如 "BTC"
             open_candidates: 存储满足开仓条件的币种信息的列表
@@ -654,32 +643,32 @@ class ArbitrageEngine:
         try:
             # 获取最新数据
             data = await self.data_manager.get_data(symbol)
-            
+
             # 检查数据有效性
             if not self.data_manager.is_data_valid(symbol):
                 self.logger.warning(f"{symbol}数据无效，跳过检查")
                 return
-            
+
             # 提取价格和资金费率
             bp_data = data["backpack"]
             hl_data = data["hyperliquid"]
-            
+
             bp_price = bp_data["price"]
             bp_funding = bp_data["funding_rate"]
             hl_price = hl_data["price"]
             hl_funding = hl_data["funding_rate"]
-            
+
             # 调整Hyperliquid资金费率以匹配Backpack的8小时周期
             adjusted_hl_funding = hl_funding * 8
-            
+
             # 计算价格差异（百分比）
             price_diff_percent = (bp_price - hl_price) / hl_price * 100
-            
+
             # 计算资金费率差异
             funding_diff, funding_diff_sign = calculate_funding_diff(
                 bp_funding, hl_funding)
             funding_diff_percent = funding_diff * 100  # 转为百分比
-            
+
             bp_symbol = get_backpack_symbol(symbol)
             has_position = (
                 bp_symbol in bp_positions) or (
@@ -741,23 +730,23 @@ class ArbitrageEngine:
                         self.display_manager.update_market_data(market_data)
             except Exception as e:
                 self.logger.error(f"计算{symbol}滑点信息时出错: {e}")
-            
+
             # 记录当前状态和调整后的资金费率
             self.logger.info(
                 f"{symbol} - 价格差: {price_diff_percent:.4f}%, "
                 f"资金费率差: {funding_diff_percent:.6f}%, "
                 f"BP: {bp_funding:.6f}(8h), HL原始: {hl_funding:.6f}(1h), HL调整后: {adjusted_hl_funding:.6f}(8h), "
                 f"持仓: {'是' if has_position else '否'}")
-            
+
             if not has_position:
                 # 没有仓位，检查是否满足开仓条件
                 should_open, reason, available_size = self._check_open_conditions_without_execution(
-                    symbol, 
-                    bp_price, 
-                    hl_price, 
-                    bp_funding, 
-                    adjusted_hl_funding, 
-                    price_diff_percent, 
+                    symbol,
+                    bp_price,
+                    hl_price,
+                    bp_funding,
+                    adjusted_hl_funding,
+                    price_diff_percent,
                     funding_diff,
                     bp_positions,
                     hl_positions
@@ -780,21 +769,21 @@ class ArbitrageEngine:
                 # 有仓位，检查是否满足平仓条件
                 bp_position = bp_positions.get(bp_symbol)
                 hl_position = hl_positions.get(symbol)
-                
+
                 if bp_position and hl_position:
                     should_close, reason, position = self._check_close_conditions_without_execution(
-                        symbol, 
-                        bp_position, 
-                        hl_position, 
-                        bp_price, 
-                        hl_price, 
-                        bp_funding, 
-                        adjusted_hl_funding, 
-                        price_diff_percent, 
-                        funding_diff, 
+                        symbol,
+                        bp_position,
+                        hl_position,
+                        bp_price,
+                        hl_price,
+                        bp_funding,
+                        adjusted_hl_funding,
+                        price_diff_percent,
+                        funding_diff,
                         funding_diff_sign
                     )
-        
+
                     if should_close:
                         self.logger.info(f"{symbol} - 决定纳入批量平仓候选，原因: {reason}")
                         # 将满足平仓条件的币种信息添加到候选列表
@@ -805,25 +794,25 @@ class ArbitrageEngine:
                         })
                     else:
                         self.logger.debug(f"{symbol} - 不满足平仓条件，保持持仓")
-        
+
         except Exception as e:
             self.logger.error(f"收集{symbol}套利机会异常: {e}", exc_info=True)
-    
+
     def _check_open_conditions_without_execution(
-        self, 
-        symbol: str, 
-        bp_price: float, 
-        hl_price: float, 
-        bp_funding: float, 
-        adjusted_hl_funding: float, 
-        price_diff_percent: float, 
+        self,
+        symbol: str,
+        bp_price: float,
+        hl_price: float,
+        bp_funding: float,
+        adjusted_hl_funding: float,
+        price_diff_percent: float,
         funding_diff: float,
         bp_positions: dict,
         hl_positions: dict
     ):
         """
         检查是否满足开仓条件，但不执行开仓
-        
+
         Args:
             symbol: 基础币种，如 "BTC"
             bp_price: Backpack价格
@@ -841,7 +830,7 @@ class ArbitrageEngine:
         # 检查是否已有该币种的持仓
         bp_symbol = get_backpack_symbol(symbol)
         has_position = (bp_symbol in bp_positions) or (symbol in hl_positions)
-        
+
         if has_position:
             return False, "已有持仓", 0
 
@@ -870,21 +859,21 @@ class ArbitrageEngine:
         max_positions_count = self.config.get(
             "strategy", {}).get(
             "max_positions_count", 5)
-        
+
         # 统计不同币种的持仓数量
         position_symbols = set()
-        
+
         # 统计Backpack持仓币种
         for pos_symbol in bp_positions:
             base_symbol = pos_symbol.split('_')[0]  # 从"BTC_USDC_PERP"中提取"BTC"
             position_symbols.add(base_symbol)
-        
+
         # 统计Hyperliquid持仓币种
         for pos_symbol in hl_positions:
             position_symbols.add(pos_symbol)
-        
+
         current_positions_count = len(position_symbols)
-        
+
         # 检查是否达到最大持仓数量限制
         if current_positions_count >= max_positions_count:
             self.logger.warning(
@@ -893,23 +882,23 @@ class ArbitrageEngine:
                 self.display_manager.add_order_message(
                     f"已达全局持仓限制({max_positions_count}币种)，跳过{symbol}开仓")
             return False, f"已达到全局最大持仓数量限制({max_positions_count})", None
-        
+
         # 计算当前持仓的总量，用于检查是否超过最大持仓
         current_size = 0
-        
+
         # 获取交易对配置，检查最大持仓限制
         trading_pair_config = None
         for pair in self.config.get("trading_pairs", []):
             if pair["symbol"] == symbol:
                 trading_pair_config = pair
                 break
-        
+
         if not trading_pair_config:
             return False, f"未找到{symbol}的交易对配置", None
-        
+
         # 获取最大持仓数量
         max_position_size = trading_pair_config.get("max_position_size", 0)
-        
+
         # 检查是否超过最大持仓限制
         if current_size >= max_position_size:
             self.logger.warning(
@@ -918,22 +907,22 @@ class ArbitrageEngine:
                 self.display_manager.add_order_message(
                     f"{symbol}已达最大持仓限制({max_position_size})，跳过开仓")
             return False, f"{symbol}当前持仓({current_size})已达到或超过最大持仓限制({max_position_size})", None
-        
+
         # 计算可用的剩余开仓量
         available_size = max_position_size - current_size
-        
+
         # 获取开仓条件配置
         open_conditions = self.config.get(
             "strategy", {}).get(
             "open_conditions", {})
         condition_type = open_conditions.get("condition_type", "funding_only")
-        
+
         # 检查价格差异条件
         min_price_diff = open_conditions.get("min_price_diff_percent", 0.2)
         max_price_diff = open_conditions.get("max_price_diff_percent", 1.0)
         price_condition_met = min_price_diff <= abs(
             price_diff_percent) <= max_price_diff
-        
+
         # 检查资金费率差异条件
         min_funding_diff = open_conditions.get("min_funding_diff", 0.00001)
         funding_condition_met = abs(funding_diff) >= min_funding_diff
@@ -953,27 +942,26 @@ class ArbitrageEngine:
         direction_consistent = True  # 默认方向一致，如果不检查方向一致性，则此条件始终为True
         preferred_bp_side = None
         preferred_hl_side = None
-        
+
         if check_direction_consistency and price_condition_met and funding_condition_met:
             direction_consistent, preferred_bp_side, preferred_hl_side = self.check_direction_consistency(
-                symbol, bp_price, hl_price, bp_funding, adjusted_hl_funding
-            )
-            
+                symbol, bp_price, hl_price, bp_funding, adjusted_hl_funding)
+
             # 如果方向一致，使用资金费率套利的方向作为最终开仓方向
             if direction_consistent:
                 # 确保preferred_sides字典存在
                 if not hasattr(self, 'preferred_sides'):
                     self.preferred_sides = {}
-                    
+
                 self.preferred_sides[symbol] = {
                     "bp_side": preferred_bp_side,
                     "hl_side": preferred_hl_side
                 }
-        
+
         # 根据条件类型决定是否开仓
         should_open = False
         reason = ""
-        
+
         if condition_type == "any":
             # 满足任一条件即可开仓
             should_open = (
@@ -991,7 +979,7 @@ class ArbitrageEngine:
             # 仅考虑价格差异条件
             should_open = price_condition_met and direction_consistent
             reason = "满足价格差异条件"
-        
+
         # 记录条件判断结果
         self.logger.info(
             f"{symbol} - 开仓条件检查: 价格条件{'' if price_condition_met else '未'}满足 "
@@ -1002,17 +990,23 @@ class ArbitrageEngine:
 
         return should_open, reason, available_size
 
-    def check_direction_consistency(self, symbol, bp_price, hl_price, bp_funding, hl_funding):
+    def check_direction_consistency(
+            self,
+            symbol,
+            bp_price,
+            hl_price,
+            bp_funding,
+            hl_funding):
         """
         检查基于价差和资金费率的开仓方向是否一致
-        
+
         Args:
             symbol: 基础币种，如 "BTC"
             bp_price: Backpack价格
             hl_price: Hyperliquid价格
             bp_funding: Backpack资金费率
             hl_funding: Hyperliquid资金费率
-            
+
         Returns:
             tuple: (is_consistent, funding_bp_side, funding_hl_side) 方向是否一致，以及基于资金费率的建议开仓方向
         """
@@ -1026,7 +1020,7 @@ class ArbitrageEngine:
             # HL价格高，价差套利应该BP做多，HL做空
             price_bp_side = "BUY"
             price_hl_side = "SELL"
-        
+
         # 2. 计算基于资金费率的开仓方向
         if bp_funding < 0 and hl_funding < 0:
             # 两交易所资金费率都为负
@@ -1049,16 +1043,16 @@ class ArbitrageEngine:
             # 经典资金费率套利：资金费率为正的交易所做空(支付资金费)，为负的交易所做多(收取资金费)
             funding_bp_side = "SELL" if bp_funding > 0 else "BUY"
             funding_hl_side = "SELL" if hl_funding > 0 else "BUY"
-        
+
         # 3. 比较两种策略的开仓方向是否一致
-        is_consistent = (price_bp_side == funding_bp_side and price_hl_side == funding_hl_side)
-        
+        is_consistent = (
+            price_bp_side == funding_bp_side and price_hl_side == funding_hl_side)
+
         self.logger.info(
             f"{symbol} - 方向一致性检查：价差套利方向(BP={price_bp_side}, HL={price_hl_side})，"
             f"资金费率套利方向(BP={funding_bp_side}, HL={funding_hl_side})，"
-            f"{'一致' if is_consistent else '不一致'}"
-        )
-        
+            f"{'一致' if is_consistent else '不一致'}")
+
         return is_consistent, funding_bp_side, funding_hl_side
 
     def _check_close_conditions_without_execution(
@@ -1098,54 +1092,47 @@ class ArbitrageEngine:
             "close_conditions", {})
         condition_type = close_conditions.get("condition_type", "any")
         
-        # 资金费率差异符号变化条件
-        funding_sign_change = close_conditions.get(
-            "funding_diff_sign_change", True)
-
-        # 价格差异符号变化条件
-        price_sign_change = close_conditions.get(
-            "price_diff_sign_change", False)
-
-        # 计算当前价格差异的符号
+        # 检查持仓时间是否足够长
+        min_position_time = close_conditions.get("min_position_time", 600)  # 默认最小持仓10分钟
+        current_time = time.time()
+        open_time = self.position_open_times.get(symbol, 0)
+        
+        if open_time > 0:  # 如果有记录开仓时间
+            position_duration = current_time - open_time
+            if position_duration < min_position_time:
+                self.logger.debug(f"{symbol} - 持仓时间过短({position_duration:.0f}秒<{min_position_time}秒)，暂不平仓")
+                return False, "持仓时间过短", None
+        
+        # 资金费率差异符号变化条件已弃用，新增方向反转检查
+        # 计算当前市场状况下的建议开仓方向
+        is_consistent, bp_current_side, hl_current_side = self.check_direction_consistency(
+            symbol, bp_price, hl_price, bp_funding, adjusted_hl_funding)
+        
+        # 从持仓获取实际开仓方向
+        bp_entry_side = bp_position.get("side", "UNKNOWN")
+        hl_entry_side = hl_position.get("side", "UNKNOWN")
+        
+        # 判断方向是否反转（现在建议的方向与开仓方向相反）
+        bp_direction_reversed = (bp_entry_side == "BUY" and bp_current_side == "SELL") or \
+                               (bp_entry_side == "SELL" and bp_current_side == "BUY")
+        hl_direction_reversed = (hl_entry_side == "BUY" and hl_current_side == "SELL") or \
+                               (hl_entry_side == "SELL" and hl_current_side == "BUY")
+        
+        # 方向反转条件：双向反转且方向一致
+        direction_reversed = bp_direction_reversed and hl_direction_reversed and is_consistent
+        
+        self.logger.info(
+            f"{symbol} - 方向反转检查: 持仓方向(BP={bp_entry_side}, HL={hl_entry_side})，"
+            f"当前建议方向(BP={bp_current_side}, HL={hl_current_side})，"
+            f"方向反转={direction_reversed}，方向一致={is_consistent}"
+        )
+        
+        # 如果方向未反转，说明还未到平仓时机
+        if not direction_reversed:
+            return False, "方向未反转，不满足平仓条件", None
+        
+        # 保留原有价格差异检查
         price_diff_sign = 1 if price_diff_percent > 0 else -1
-        
-        # 检查是否存在开仓时记录的资金费率符号
-        entry_funding_diff_sign = self.funding_diff_signs.get(symbol)
-        
-        # 资金费率差异符号变化条件 - 检查符号是否反转
-        funding_sign_changed = False
-        if entry_funding_diff_sign is not None:
-            funding_sign_changed = entry_funding_diff_sign != funding_diff_sign
-            self.logger.debug(
-                f"{symbol} - 资金费率符号检查: 开仓时={entry_funding_diff_sign}, 当前={funding_diff_sign}, 变化={funding_sign_changed}")
-
-        # 检查是否存在开仓时记录的价格差符号（如果不存在，尝试记录当前符号）
-        entry_price_diff_sign = None
-        price_sign_changed = False
-
-        # 尝试从持仓信息中获取开仓时的价格差符号
-        if hasattr(
-                self,
-                'price_diff_signs') and isinstance(
-                self.price_diff_signs,
-                dict):
-            entry_price_diff_sign = self.price_diff_signs.get(symbol)
-        else:
-            # 如果price_diff_signs不存在，创建它
-            self.price_diff_signs = {}
-
-        # 如果没有开仓时的价格差符号记录，可能是旧持仓，记录当前符号
-        if entry_price_diff_sign is None and symbol in self.funding_diff_signs:
-            self.price_diff_signs[symbol] = price_diff_sign
-            self.logger.info(
-                f"{symbol} - 未找到开仓时价格差符号记录，记录当前符号: {price_diff_sign}")
-            entry_price_diff_sign = price_diff_sign
-
-        # 检查价格差符号是否变化
-        if entry_price_diff_sign is not None:
-            price_sign_changed = entry_price_diff_sign != price_diff_sign
-            self.logger.debug(
-                f"{symbol} - 价格差符号检查: 开仓时={entry_price_diff_sign}, 当前={price_diff_sign}, 变化={price_sign_changed}")
         
         # 资金费率差异最小值条件（当差异过小，无套利空间时平仓）
         min_funding_diff = close_conditions.get("min_funding_diff", 0.000005)
@@ -1153,13 +1140,6 @@ class ArbitrageEngine:
         # 价格差异条件（获利/止损）
         min_profit_percent = close_conditions.get("min_profit_percent", 0.1)
         max_loss_percent = close_conditions.get("max_loss_percent", 0.3)
-        
-        # 持仓时间条件
-        max_position_time = close_conditions.get(
-            "max_position_time", 28800)  # 默认8小时
-        
-        # 由于我们没有本地持仓记录，无法确切知道开仓时间和开仓时的资金费率
-        # 这里主要依赖当前的价格差异和资金费率差异来判断是否平仓
         
         # 检查滑点条件
         max_close_slippage = close_conditions.get(
@@ -1181,178 +1161,53 @@ class ArbitrageEngine:
                 f"{symbol} - 预估平仓滑点({total_slippage:.4f}%)超过最大允许值({max_close_slippage:.4f}%)，暂不纳入平仓候选")
             return False, f"滑点过高({total_slippage:.4f}%)", None
         
-        # 检查持仓时间（如果配置了最小持仓时间）
-        min_position_time = close_conditions.get("min_position_time", 0)  # 默认不限制
-        
-        if min_position_time > 0 and symbol in self.position_directions:
-            open_time = self.position_directions[symbol].get("time", 0)
-            current_time = time.time()
-            position_duration = current_time - open_time
-            
-            if position_duration < min_position_time:
-                self.logger.debug(f"{symbol} - 持仓时间({position_duration:.0f}秒)小于最小持仓时间({min_position_time}秒)，暂不平仓")
-                return False, "持仓时间过短", None
-        
-        # 获取当前的交易方向建议
-        is_consistent, bp_current_side, hl_current_side = self.check_direction_consistency(
-            symbol, bp_price, hl_price, bp_funding, adjusted_hl_funding)
-        
-        # 初始化方向反转条件
-        direction_reversed = False
-        entry_directions = self.position_directions.get(symbol)
-        
-        if entry_directions:
-            bp_entry_side = entry_directions.get("bp_side")
-            hl_entry_side = entry_directions.get("hl_side")
-            
-            # 判断方向是否反转（当前建议的方向与开仓方向相反）
-            bp_direction_reversed = (bp_entry_side == "BUY" and bp_current_side == "SELL") or \
-                                   (bp_entry_side == "SELL" and bp_current_side == "BUY")
-            hl_direction_reversed = (hl_entry_side == "BUY" and hl_current_side == "SELL") or \
-                                   (hl_entry_side == "SELL" and hl_current_side == "BUY")
-            
-            # 只有两个交易所的方向都反转了，才表示真正盈利
-            direction_reversed = bp_direction_reversed and hl_direction_reversed
-            
-            self.logger.info(
-                f"{symbol} - 方向反转检查: 开仓方向(BP={bp_entry_side}, HL={hl_entry_side})，"
-                f"当前建议方向(BP={bp_current_side}, HL={hl_current_side})，"
-                f"方向反转={direction_reversed}, 方向一致性检查={is_consistent}"
-            )
-        else:
-            # 如果找不到开仓方向记录，可能是旧持仓
-            self.logger.warning(f"{symbol} - 未找到开仓方向记录，无法确认方向是否反转，将使用传统符号反转判断")
-            
-            # 使用传统的符号反转逻辑作为备用
-        # 1. 资金费率差异符号变化条件
-            funding_sign_condition_met = funding_sign_changed and funding_sign_change
-        
-        # 2. 资金费率差异条件
-        funding_value_condition_met = abs(funding_diff) >= min_funding_diff
-        
-        # 组合资金费率条件
-        funding_condition_met = funding_sign_condition_met and funding_value_condition_met
-        
-            # 3. 价格差异符号变化条件
-            if price_sign_change:
-                # 如果要求价格差符号反转，则需要差值大于阈值
-                price_condition_met = price_sign_changed and abs(
-                    price_diff_percent) >= min_profit_percent
-            else:
-                # 如果不要求价格差符号反转，则只需要差值小于阈值
-                price_condition_met = abs(price_diff_percent) < min_profit_percent
-            
-            # 检查方向一致性
-            check_direction_consistency = close_conditions.get(
-                "check_direction_consistency", False)
-            direction_consistent = True  # 默认方向一致，如果不检查方向一致性，则此条件始终为True
-
-            if check_direction_consistency and price_condition_met and funding_condition_met:
-                # 获取价格差异和资金费率差异的方向（正负号）
-                current_funding_diff_sign = 1 if funding_diff > 0 else -1
-
-                # 检查方向是否一致（同号）
-                direction_consistent = price_diff_sign == current_funding_diff_sign
-
-                if not direction_consistent:
-                    self.logger.info(
-                        f"{symbol} - 平仓方向一致性检查未通过: 价格差异方向({price_diff_percent:.4f}%, 符号={price_diff_sign}) "
-                        f"与资金费率差异方向({funding_diff:.6f}, 符号={current_funding_diff_sign})不一致")
-        
-        # 根据条件类型决定是否平仓
-        should_close = False
-        reason = ""
-        
-        if condition_type == "any":
-            # 满足任一条件即可平仓
-                if funding_condition_met and direction_consistent:
-                should_close = True
-                reason = f"资金费率符号反转，差异({abs(funding_diff):.6f})超过阈值({min_funding_diff})"
-                elif price_condition_met and direction_consistent:
-                should_close = True
-                    if price_sign_change:
-                        reason = f"价格差异符号反转，差异({abs(price_diff_percent):.4f}%)超过阈值({min_profit_percent}%)"
-                    else:
-                        reason = f"价格差异({abs(price_diff_percent):.4f}%)小于阈值({min_profit_percent}%)，接近套利完成"
-        elif condition_type == "all":
-            # 必须同时满足所有条件才能平仓
-                should_close = funding_condition_met and price_condition_met and direction_consistent
-                reason = "同时满足资金费率差异和价格差异条件"
-        elif condition_type == "funding_only":
-            # 仅考虑资金费率条件
-                should_close = funding_condition_met and direction_consistent
-            reason = f"资金费率符号反转，差异({abs(funding_diff):.6f})超过阈值({min_funding_diff})"
-        elif condition_type == "price_only":
-            # 仅考虑价格差异条件
-                should_close = price_condition_met and direction_consistent
-                if price_sign_change:
-                    reason = f"价格差异符号反转，差异({abs(price_diff_percent):.4f}%)超过阈值({min_profit_percent}%)"
-                else:
-                    reason = f"价格差异({abs(price_diff_percent):.4f}%)小于阈值({min_profit_percent}%)，接近套利完成"
-            
-            # 创建持仓对象
-            position = {
-                "bp_symbol": get_backpack_symbol(symbol),
-                "hl_symbol": symbol,
-                "bp_side": bp_position["side"],
-                "hl_side": hl_position["side"],
-                "bp_size": bp_position["size"],
-                "hl_size": hl_position["size"]
-            }
-                
-            return should_close, reason, position
-        
-        # 使用方向反转逻辑进行判断（仅在找到开仓方向记录时使用）
-        # 1. 资金费率差异条件
-        funding_value_condition_met = abs(funding_diff) >= min_funding_diff
-        
-        # 2. 价格差异条件
+        # 检查资金费率和价格差异条件
+        funding_condition_met = abs(funding_diff) >= min_funding_diff
         price_condition_met = abs(price_diff_percent) >= min_profit_percent
-        
-        # 盈利条件：方向反转且方向一致性检查通过
-        profit_condition_met = direction_reversed and is_consistent
-        
+                
         # 根据条件类型决定是否平仓
         should_close = False
         reason = ""
         
         if condition_type == "any":
-            # 满足任一条件即可平仓
-            if (funding_value_condition_met or price_condition_met) and profit_condition_met:
-                should_close = True
-                reason = f"检测到方向反转且满足套利条件，确认盈利"
+            # 满足任一条件即可平仓（但必须满足方向反转）
+            should_close = (funding_condition_met or price_condition_met)
+            if funding_condition_met:
+                reason = f"资金费率差异({abs(funding_diff):.6f})满足条件且方向已反转，确认盈利"
+            elif price_condition_met:
+                reason = f"价格差异({abs(price_diff_percent):.4f}%)满足条件且方向已反转，确认盈利"
         elif condition_type == "all":
             # 必须同时满足所有条件才能平仓
-            should_close = funding_value_condition_met and price_condition_met and profit_condition_met
-            reason = "同时满足资金费率差异、价格差异条件和方向反转，确认盈利"
+            should_close = funding_condition_met and price_condition_met
+            reason = "同时满足资金费率差异和价格差异条件且方向已反转，确认盈利"
         elif condition_type == "funding_only":
             # 仅考虑资金费率条件
-            should_close = funding_value_condition_met and profit_condition_met
-            reason = f"资金费率差异({abs(funding_diff):.6f})超过阈值且方向反转，确认盈利"
+            should_close = funding_condition_met
+            reason = f"资金费率差异({abs(funding_diff):.6f})满足条件且方向已反转，确认盈利"
         elif condition_type == "price_only":
             # 仅考虑价格差异条件
-            should_close = price_condition_met and profit_condition_met
-            reason = f"价格差异({abs(price_diff_percent):.4f}%)满足条件且方向反转，确认盈利"
+            should_close = price_condition_met
+            reason = f"价格差异({abs(price_diff_percent):.4f}%)满足条件且方向已反转，确认盈利"
         
         # 记录条件判断结果
         self.logger.info(
-            f"{symbol} - 平仓条件检查(新): 资金费率条件{'' if funding_value_condition_met else '未'}满足 "
+            f"{symbol} - 平仓条件检查: 资金费率条件{'' if funding_condition_met else '未'}满足 "
             f"(差异: {abs(funding_diff):.6f}, 阈值: {min_funding_diff}), "
             f"价格条件{'' if price_condition_met else '未'}满足 "
             f"(差异: {abs(price_diff_percent):.4f}%, 阈值: {min_profit_percent}%), "
-            f"方向反转{'' if direction_reversed else '未'}确认, "
-            f"方向一致性{'' if is_consistent else '未'}通过")
+            f"方向反转条件{'' if direction_reversed else '未'}满足"
+        )
             
-            # 创建持仓对象
-            position = {
-                "bp_symbol": get_backpack_symbol(symbol),
-                "hl_symbol": symbol,
-                "bp_side": bp_position["side"],
-                "hl_side": hl_position["side"],
-                "bp_size": bp_position["size"],
-                "hl_size": hl_position["size"]
-            }
-            
+        # 创建持仓对象
+        position = {
+            "bp_symbol": get_backpack_symbol(symbol),
+            "hl_symbol": symbol,
+            "bp_side": bp_position["side"],
+            "hl_side": hl_position["side"],
+            "bp_size": bp_position["size"],
+            "hl_size": hl_position["size"]
+        }
+
         return should_close, reason, position
 
     async def _open_position(
@@ -1364,7 +1219,7 @@ class ArbitrageEngine:
             available_size: float = None):
         """
         开仓
-        
+
         Args:
             symbol: 基础币种，如 "BTC"
             funding_diff: 资金费率差
@@ -1375,53 +1230,53 @@ class ArbitrageEngine:
         try:
             # 获取最新数据
             data = await self.data_manager.get_data(symbol)
-            
+
             # 获取价格
             bp_price = data["backpack"]["price"]
             hl_price = data["hyperliquid"]["price"]
-            
+
             if bp_price is None or hl_price is None:
                 self.logger.error(f"{symbol}价格数据无效，无法开仓")
                 return
-            
+
             # 获取交易对配置
             trading_pair_config = None
             for pair in self.config.get("trading_pairs", []):
                 if pair["symbol"] == symbol:
                     trading_pair_config = pair
                     break
-            
+
             if not trading_pair_config:
                 self.logger.error(f"未找到{symbol}的交易对配置")
                 return
-            
+
             # 获取最大持仓数量和最小交易量
             max_position_size = trading_pair_config.get("max_position_size")
             min_volume = trading_pair_config.get("min_volume")
-            
+
             # 计算开仓数量
             bp_size = available_size if available_size is not None else self.position_sizes[
                 symbol]
             hl_size = bp_size  # 两个交易所使用相同的开仓数量
-            
+
             # 检查是否小于最小交易量
             if bp_size < min_volume:
                 self.logger.warning(
                     f"{symbol}开仓数量({bp_size})小于最小交易量({min_volume})，已调整为最小交易量")
                 bp_size = min_volume
                 hl_size = min_volume
-            
+
             # 检查是否超过最大持仓数量
             if max_position_size is not None and (bp_size > max_position_size):
                 self.logger.warning(
                     f"{symbol}开仓数量({bp_size})超过最大持仓数量({max_position_size})，已调整为最大持仓数量")
                 bp_size = max_position_size
                 hl_size = max_position_size
-            
+
             # 计算资金费率差
             funding_diff, funding_diff_sign = calculate_funding_diff(
                 bp_funding, hl_funding)
-            
+
             # 记录当前的资金费率符号用于后续平仓判断
             self.funding_diff_signs[symbol] = funding_diff_sign
             self.logger.debug(f"记录{symbol}开仓时的资金费率符号: {funding_diff_sign}")
@@ -1439,19 +1294,22 @@ class ArbitrageEngine:
             # 记录当前的价格差符号用于后续平仓判断
             self.price_diff_signs[symbol] = price_diff_sign
             self.logger.debug(f"记录{symbol}开仓时的价格差符号: {price_diff_sign}")
-            
+
             # 准备仓位数据
             bp_symbol = get_backpack_symbol(
                 symbol)  # 使用正确的交易对格式，如 BTC_USDC_PERP
             hl_symbol = get_hyperliquid_symbol(symbol)
 
             # 检查是否存在已经计算好的开仓方向
-            if hasattr(self, 'preferred_sides') and symbol in self.preferred_sides:
+            if hasattr(
+                    self,
+                    'preferred_sides') and symbol in self.preferred_sides:
                 # 使用方向一致性检查时预先计算的方向
                 bp_side = self.preferred_sides[symbol]["bp_side"]
                 hl_side = self.preferred_sides[symbol]["hl_side"]
-                self.logger.info(f"{symbol} - 使用方向一致性检查确定的交易方向: BP={bp_side}, HL={hl_side}")
-                
+                self.logger.info(
+                    f"{symbol} - 使用方向一致性检查确定的交易方向: BP={bp_side}, HL={hl_side}")
+
                 # 使用完后清除，避免影响下次开仓
                 del self.preferred_sides[symbol]
             else:
@@ -1498,14 +1356,14 @@ class ArbitrageEngine:
             for pos in pre_bp_positions.values():
                 if pos.get("symbol") == bp_symbol:
                     pre_bp_position = pos
-                                    break
-                    
+                    break
+
             pre_hl_position = None
             for pos in pre_hl_positions.values():
                 if pos.get("symbol") == hl_symbol:
                     pre_hl_position = pos
-                                    break
-                                
+                    break
+
             self.logger.info(
                 f"开仓前持仓: BP {bp_symbol}={pre_bp_position}, HL {hl_symbol}={pre_hl_position}")
 
@@ -1677,38 +1535,57 @@ class ArbitrageEngine:
             # 根据持仓变化情况判断开仓成功与否
             if bp_position_changed and hl_position_changed:
                 # 两个交易所都成功开仓
-                    message = (
-                        f"开仓成功: \n"
-                        f"Backpack: {bp_side} {bp_size} {bp_symbol}\n"
-                        f"Hyperliquid: {hl_side} {hl_size} {hl_symbol}"
-                    )
-                    self.logger.info(message)
-                    self.display_manager.add_order_message(message)
+                message = (
+                    f"开仓成功: \n"
+                    f"Backpack: {bp_side} {bp_size} {bp_symbol}\n"
+                    f"Hyperliquid: {hl_side} {hl_size} {hl_symbol}"
+                )
+                self.logger.info(message)
+                self.display_manager.add_order_message(message)
                 # 更新订单统计
                 self.display_manager.update_order_stats("open", True)
                 
-                # 记录开仓方向和资金费率
-                self.record_position_direction(symbol, post_bp_position, post_hl_position)
+                # 记录开仓方向和时间
+                self.position_directions[symbol] = {
+                    "bp_side": bp_side,
+                    "hl_side": hl_side
+                }
+                self.position_open_times[symbol] = time.time()
+                
+                # 记录开仓价格和资金费率
+                self.entry_prices[symbol] = {
+                    "bp_price": bp_price,
+                    "hl_price": hl_price
+                }
+                self.entry_funding_rates[symbol] = {
+                    "bp_funding": bp_funding,
+                    "hl_funding": hl_funding
+                }
                 
                 # 保存开仓快照
-                self.save_trade_snapshot(symbol, "open", post_bp_position, post_hl_position)
-                
-                # 记录资金费率符号
-                self.funding_diff_signs[symbol] = funding_diff_sign
-                self._save_funding_diff_signs()
-                
+                self._save_position_snapshot(
+                    symbol=symbol,
+                    action="open",
+                    bp_position={"side": bp_side, "size": bp_size},
+                    hl_position={"side": hl_side, "size": hl_size},
+                    bp_price=bp_price,
+                    hl_price=hl_price,
+                    bp_funding=bp_funding,
+                    hl_funding=hl_funding
+                )
+                    
                 # 发送通知
-                    if self.alerter:
-                        self.alerter.send_order_notification(
-                            symbol=symbol,
-                            action="开仓",
-                            quantity=bp_size,
-                            price=bp_price,
-                            side="多" if bp_side == "BUY" else "空",
-                            exchange="Backpack"
-                        )
+                if self.alerter:
+                    self.alerter.send_order_notification(
+                        symbol=symbol,
+                        action="开仓",
+                        quantity=bp_size,
+                        price=bp_price,
+                        side="多" if bp_side == "BUY" else "空",
+                        exchange="Backpack"
+                    )
                 return True
-            
+
             elif bp_position_changed and not hl_position_changed:
                 # 只有Backpack成功开仓，尝试平掉单边持仓
                 self.logger.warning(f"{symbol}只在Backpack开仓成功，尝试关闭单边持仓")
@@ -1739,19 +1616,19 @@ class ArbitrageEngine:
                 # 更新订单统计
                 self.display_manager.update_order_stats("open", False)
                 return False
-                
+
             else:
                 # 两个交易所都未成功开仓
                 self.logger.error(f"{symbol}在两个交易所均未成功开仓")
                 # 更新订单统计
                 self.display_manager.update_order_stats("open", False)
                 return False
-                
+
         except Exception as e:
             self.logger.error(f"{symbol}开仓过程发生异常: {e}")
             self.display_manager.add_order_message(f"{symbol}开仓过程发生异常: {e}")
             return False
-    
+
     async def _close_position(self, symbol: str, position: Dict[str, Any]):
         """
         平仓
@@ -1784,8 +1661,19 @@ class ArbitrageEngine:
             self.logger.info(message)
             self.display_manager.add_order_message(message)
             
-            # 获取当前价格
-            bp_price = await self.backpack_api.get_price(bp_symbol)
+            # 获取当前价格和资金费率
+            data = await self.data_manager.get_data(symbol)
+            if not data:
+                message = f"无法获取{symbol}的市场数据，平仓失败"
+                self.logger.error(message)
+                self.display_manager.add_order_message(message)
+                return False
+                
+            bp_price = data["backpack"]["price"]
+            hl_price = data["hyperliquid"]["price"]
+            bp_funding = data["backpack"]["funding_rate"]
+            hl_funding = data["hyperliquid"]["funding_rate"] * 8  # 调整为8小时周期
+            
             if not bp_price:
                 message = f"无法获取{bp_symbol}的当前价格，平仓失败"
                 self.logger.error(message)
@@ -1821,11 +1709,11 @@ class ArbitrageEngine:
             if pre_hl_position is None:
                 self.logger.warning(f"Hyperliquid没有{hl_symbol}的持仓，无需平仓")
                 return False
-                
+
             # 根据买卖方向调整价格确保快速成交
             bp_price_adjuster = 1.005 if bp_close_side == "BUY" else 0.995
             bp_limit_price = bp_price * bp_price_adjuster
-            
+
             # 根据tick_size调整价格
             bp_limit_price = round(bp_limit_price / tick_size) * tick_size
 
@@ -1835,7 +1723,7 @@ class ArbitrageEngine:
             self.logger.info(
                 f"平仓价格计算: 原始价格={bp_price}, 调整系数={bp_price_adjuster}, "
                 f"调整后价格={bp_limit_price}, 精度={price_precision}, tick_size={tick_size}")
-            
+
             # 同时平仓
             bp_order_task = asyncio.create_task(
                 self.backpack_api.place_order(
@@ -1857,14 +1745,14 @@ class ArbitrageEngine:
                     order_type="MARKET"  # 使用市价单简化操作
                 )
             )
-            
+
             # 等待平仓结果
             bp_result, hl_result = await asyncio.gather(
                 bp_order_task,
                 hl_order_task,
                 return_exceptions=True
             )
-            
+
             # 检查平仓结果
             bp_success = not isinstance(bp_result, Exception) and not (
                 isinstance(bp_result, dict) and bp_result.get("error"))
@@ -1974,9 +1862,27 @@ class ArbitrageEngine:
                 # 更新订单统计
                 self.display_manager.update_order_stats("close", True)
                 
-                # 保存平仓快照并清除开仓方向记录
-                self.save_trade_snapshot(symbol, "close", pre_bp_position, pre_hl_position)
-                self.clear_position_direction(symbol)
+                # 保存平仓快照
+                self._save_position_snapshot(
+                    symbol=symbol,
+                    action="close",
+                    bp_position=bp_position,
+                    hl_position=hl_position,
+                    bp_price=bp_price,
+                    hl_price=hl_price,
+                    bp_funding=bp_funding,
+                    hl_funding=hl_funding
+                )
+                
+                # 清除方向记录
+                if symbol in self.position_directions:
+                    del self.position_directions[symbol]
+                if symbol in self.position_open_times:
+                    del self.position_open_times[symbol]
+                if symbol in self.entry_prices:
+                    del self.entry_prices[symbol]
+                if symbol in self.entry_funding_rates:
+                    del self.entry_funding_rates[symbol]
                 
                 # 清除资金费率符号记录
                 if symbol in self.funding_diff_signs:
@@ -2009,42 +1915,45 @@ class ArbitrageEngine:
                 # 更新订单统计
                 self.display_manager.update_order_stats("close", False)
                 return False
-                    
-                    except Exception as e:
+
+        except Exception as e:
             message = f"{symbol}平仓异常: {e}"
             self.logger.error(message)
-            self.display_manager.add_order_message(message) 
+            self.display_manager.add_order_message(message)
             return False
 
-    def _update_position_direction_info(self, market_data, bp_positions, hl_positions):
+    def _update_position_direction_info(
+            self, market_data, bp_positions, hl_positions):
         """
         更新市场数据中的持仓方向信息
-        
+
         Args:
             market_data: 市场数据字典
             bp_positions: Backpack持仓信息
             hl_positions: Hyperliquid持仓信息
-        
+
         Returns:
             更新后的市场数据字典
         """
         for symbol in market_data:
             bp_symbol = get_backpack_symbol(symbol)
-            
+
             # 检查BP持仓
             if bp_symbol in bp_positions:
                 # 获取BP持仓方向
                 bp_position = bp_positions[bp_symbol]
-                market_data[symbol]["bp_position_side"] = bp_position.get("side")
+                market_data[symbol]["bp_position_side"] = bp_position.get(
+                    "side")
             else:
                 market_data[symbol]["bp_position_side"] = None
-            
+
             # 检查HL持仓
             if symbol in hl_positions:
                 # 获取HL持仓方向
                 hl_position = hl_positions[symbol]
-                market_data[symbol]["hl_position_side"] = hl_position.get("side")
+                market_data[symbol]["hl_position_side"] = hl_position.get(
+                    "side")
             else:
                 market_data[symbol]["hl_position_side"] = None
-                
+
         return market_data
