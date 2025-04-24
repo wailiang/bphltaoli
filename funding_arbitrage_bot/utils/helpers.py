@@ -155,7 +155,19 @@ def get_symbol_from_exchange_symbol(exchange_symbol: str, exchange_type: str) ->
     # 默认情况下尝试直接返回
     return exchange_symbol
 
-
+def get_coinex_symbol(base_symbol: str) -> str:
+    """
+    获取CoinEx交易所的交易对符号
+    
+    Args:
+        base_symbol: 基础币种符号，如 "BTC"
+        
+    Returns:
+        CoinEx交易所的交易对符号，如 "BTCUSDT"
+    """
+    # CoinEx通常使用USDT作为计价货币
+    return f"{base_symbol}USDT"
+    
 def get_hyperliquid_symbol(base_symbol: str) -> str:
     """
     将基础币种名称转换为Hyperliquid交易对格式
@@ -332,4 +344,4 @@ def format_number(value: float, precision: int) -> str:
         格式化后的字符串
     """
     format_str = f"{{:.{precision}f}}"
-    return format_str.format(value) 
+    return format_str.format(value)

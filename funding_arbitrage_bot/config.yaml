@@ -5,18 +5,28 @@
 # 用于连接Backpack和Hyperliquid交易所的API密钥
 exchanges:
   backpack:
-    api_key: "A--------------"   # Backpack交易所的API密钥
+    # api_key: "A--------------"   # Backpack交易所的API密钥
     api_secret: "h--------------"  # Backpack交易所的API密钥对应的密钥
   hyperliquid:
     # 注意：Hyperliquid使用以太坊钱包地址和私钥进行认证
     api_key: "--------------"  # 以太坊钱包地址(API钱包)，用于签名认证
-    api_secret: "--------------"  # 以太坊钱包私钥
+    api_secret: "0xbfde42863a54ee555f64fab83644d7016d1cc173107aecb7754a5126875033bc"  # 以太坊钱包私钥
     public_address: "--------------"  # 公共ETH钱包地址，用于查询账户信息和持仓
+  binance:
+    api_key: "NmfD5fGq5IhoriysZA9e0ufb4xmm7rSm9m42aM3bnl1ty1bDZhiFe9FSxXl8tP0I"
+    api_secret: "ANvHTt3PcabJe8bjhDuYSvnuNQTPK8pZNMVVRYrU2WXIRpnthK8khPMKKxx8Gc5c"
+  bybit:
+    api_key: "5iKP3qEQLK5iFrWC93"
+    api_secret: "FZMYgP7WHrvy5k9SSKJJbH1SJb0P4rMkQGnZ"
+  coinex:
+    api_key: "25012B7C97B94229911EA1F1CE79B3BD"
+    api_secret: "47233DCB7F4713507869E1C35780AFAA5AB116053BF3587A"
+    use_testnet: true 
 
 # 套利策略配置
 # 控制套利策略的运行方式、触发条件和交易参数
 strategy:
-  symbols: ["BTC", "ETH", "SOL", "AVAX", "AAVE", "ADA", "ARB", "BERA", "BNB", "DOGE", "DOT", "ENA", "FARTCOIN", "HYPE", "IP", "JUP", "KAITO", "LINK", "LTC", "ONDO", "SUI", "S", "TRUMP", "WIF", "XRP"]  # 监控的基础币种列表，只有这些币种会被检查套利机会
+  symbols: ["BTC", "ETH", "SOL", "ADA"]  # 监控的基础币种列表，只有这些币种会被检查套利机会
   
   # 全局持仓数量限制
   max_positions_count: 5  # 最大持仓币种数量，同时最多只允许持有这么多个不同币种的仓位
@@ -30,7 +40,7 @@ strategy:
     # - "all": 必须同时满足所有条件才能开仓
     # - "funding_only": 仅考虑资金费率条件
     # - "price_only": 仅考虑价格差异条件
-    condition_type: "all"  # 默认使用资金费率条件
+    condition_type: "any"  # 默认使用资金费率条件
     
     # 资金费率差异条件参数
     min_funding_diff: 0.08  # 最小资金费率差阈值，只有当两个交易所的资金费率差大于此值时才会触发开仓////////
@@ -40,7 +50,7 @@ strategy:
     max_price_diff_percent: 2.2  # 最大价格差阈值（百分比），当差异超过此值时，可能是异常数据，不触发开仓
     
     # 方向一致性检查参数
-    check_direction_consistency: true  # 是否检查价格差异和资金费率差异的方向一致性
+    check_direction_consistency: false  # 是否检查价格差异和资金费率差异的方向一致性
     # 设为true时，只有当价格差异和资金费率差异方向一致时才开仓
     # 设为false时，不考虑方向一致性，只要满足各自的阈值条件即可开仓
 
@@ -79,28 +89,7 @@ strategy:
     BTC: 0.001  # BTC开仓数量为0.001个BTC
     ETH: 0.01   # ETH开仓数量为0.01个ETH
     SOL: 0.1    # SOL开仓数量为0.1个SOL
-    AVAX: 2  # 添加新币种的开仓数量
-    AAVE: 0.4  # AAVE开仓数量
     ADA: 80.0  # ADA开仓数量
-    ARB: 160.0  # ARB开仓数量
-    BERA: 9.0  # BERA开仓数量
-    BNB: 0.1  # BNB开仓数量
-    DOGE: 300.0  # DOGE开仓数量
-    DOT: 13.0  # DOT开仓数量
-    ENA: 160.0  # ENA开仓数量
-    FARTCOIN: 110.0  # FARTCOIN开仓数量
-    HYPE: 5.0  # HYPE开仓数量
-    IP: 13.0  # IP开仓数量
-    JUP: 130.0  # JUP开仓数量
-    KAITO: 55.0  # KAITO开仓数量
-    LINK: 4.0  # LINK开仓数量
-    LTC: 0.6  # LTC开仓数量
-    ONDO: 65.0  # ONDO开仓数量
-    SUI: 22.0  # SUI开仓数量
-    S: 100.0  # S开仓数量
-    TRUMP: 6.0  # TRUMP开仓数量
-    WIF: 130.0  # WIF开仓数量
-    XRP: 25.0  # XRP开仓数量
 
   max_total_position_usd: 150  # 所有币种的总开仓金额上限（美元），暂未使用
   check_interval: 5  # 检查套利机会的时间间隔（秒），每隔这么多秒检查一次是否有套利机会
@@ -177,156 +166,9 @@ trading_pairs:
     max_position_size: 0.1
     tick_size: 0.01
 
-  - symbol: "AVAX"
-    min_volume: 2
-    price_precision: 3
-    size_precision: 2
-    max_position_size: 2
-    tick_size: 0.001
-
-  - symbol: "AAVE"
-    min_volume: 0.4
-    price_precision: 2
-    size_precision: 1
-    max_position_size: 0.4
-    tick_size: 0.01
-
   - symbol: "ADA"
     min_volume: 80
     price_precision: 4
     size_precision: 1
     max_position_size: 80
     tick_size: 0.0001
-
-  - symbol: "ARB"
-    min_volume: 160
-    price_precision: 4
-    size_precision: 1
-    max_position_size: 160
-    tick_size: 0.0001
-
-  - symbol: "BERA"
-    min_volume: 9.0
-    price_precision: 4
-    size_precision: 1
-    max_position_size: 9
-    tick_size: 0.0001
-
-  - symbol: "BNB"
-    min_volume: 0.1
-    price_precision: 1
-    size_precision: 1
-    max_position_size: 0.1
-    tick_size: 0.1
-
-  - symbol: "DOGE"
-    min_volume: 300
-    price_precision: 5
-    size_precision: 1
-    max_position_size: 300
-    tick_size: 0.00001
-
-  - symbol: "DOT"
-    min_volume: 13
-    price_precision: 3
-    size_precision: 1
-    max_position_size: 13
-    tick_size: 0.001
-
-  - symbol: "ENA"
-    min_volume: 160
-    price_precision: 4
-    size_precision: 1
-    max_position_size: 160
-    tick_size: 0.0001
-
-  - symbol: "FARTCOIN"
-    min_volume: 110
-    price_precision: 3
-    size_precision: 1
-    max_position_size: 110
-    tick_size: 0.001
-
-  - symbol: "HYPE"
-    min_volume: 5
-    price_precision: 3
-    size_precision: 1
-    max_position_size: 5
-    tick_size: 0.001
-
-  - symbol: "IP"
-    min_volume: 13
-    price_precision: 4
-    size_precision: 1
-    max_position_size: 13
-    tick_size: 0.0001
-
-  - symbol: "JUP"
-    min_volume: 130
-    price_precision: 4
-    size_precision: 1
-    max_position_size: 130
-    tick_size: 0.0001
-
-  - symbol: "KAITO"
-    min_volume: 55
-    price_precision: 4
-    size_precision: 1
-    max_position_size: 55
-    tick_size: 0.0001
-
-  - symbol: "LINK"
-    min_volume: 4
-    price_precision: 2
-    size_precision: 1
-    max_position_size: 4
-    tick_size: 0.01
-
-  - symbol: "LTC"
-    min_volume: 0.6
-    price_precision: 2
-    size_precision: 1
-    max_position_size: 0.6
-    tick_size: 0.01
-
-  - symbol: "ONDO"
-    min_volume: 65
-    price_precision: 3
-    size_precision: 1
-    max_position_size: 65
-    tick_size: 0.001
-
-  - symbol: "SUI"
-    min_volume: 22
-    price_precision: 2
-    size_precision: 1
-    max_position_size: 22
-    tick_size: 0.01
-
-  - symbol: "S"
-    min_volume: 100
-    price_precision: 3
-    size_precision: 1
-    max_position_size: 100
-    tick_size: 0.001
-
-  - symbol: "TRUMP"
-    min_volume: 6
-    price_precision: 3
-    size_precision: 1
-    max_position_size: 6
-    tick_size: 0.001
-
-  - symbol: "WIF"
-    min_volume: 130
-    price_precision: 4
-    size_precision: 1
-    max_position_size: 130
-    tick_size: 0.0001
-
-  - symbol: "XRP"
-    min_volume: 25
-    price_precision: 4
-    size_precision: 1
-    max_position_size: 25
-    tick_size: 0.0001 

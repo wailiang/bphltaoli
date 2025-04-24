@@ -15,7 +15,8 @@ from datetime import datetime
 
 from funding_arbitrage_bot.exchanges.backpack_api import BackpackAPI
 from funding_arbitrage_bot.exchanges.hyperliquid_api import HyperliquidAPI
-from funding_arbitrage_bot.utils.helpers import get_backpack_symbol, get_hyperliquid_symbol
+from funding_arbitrage_bot.exchanges.coinex_api import CoinExAPI
+from funding_arbitrage_bot.utils.helpers import get_backpack_symbol, get_hyperliquid_symbol, get_coinex_symbol
 from funding_arbitrage_bot.utils.log_utilities import RateLimitedLogger, LogSummarizer
 
 
@@ -26,6 +27,7 @@ class DataManager:
         self, 
         backpack_api: BackpackAPI, 
         hyperliquid_api: HyperliquidAPI,
+        coinex_api: CoinExAPI,
         symbols: List[str],
         funding_update_interval: int = 60,
         logger: Optional[logging.Logger] = None,
@@ -37,6 +39,7 @@ class DataManager:
         Args:
             backpack_api: Backpack API实例
             hyperliquid_api: Hyperliquid API实例
+            coinex_api: CoinEx API实例
             symbols: 需要监控的基础币种列表，如 ["BTC", "ETH", "SOL"]
             funding_update_interval: 资金费率更新间隔（秒）
             logger: 日志记录器
@@ -44,6 +47,7 @@ class DataManager:
         """
         self.backpack_api = backpack_api
         self.hyperliquid_api = hyperliquid_api
+        self.coinex_api = coinex_api
         self.symbols = symbols
         self.funding_update_interval = funding_update_interval
         self.logger = logger or logging.getLogger(__name__)
@@ -59,12 +63,16 @@ class DataManager:
         # 检查API实例是否有效
         self.backpack_available = self.backpack_api is not None
         self.hyperliquid_available = self.hyperliquid_api is not None
+        self.coinex_available = self.coinex_api is not None
         
         if not self.backpack_available:
             self.logger.warning("Backpack API实例无效，将无法获取Backpack数据")
         
         if not self.hyperliquid_available:
             self.logger.warning("Hyperliquid API实例无效，将无法获取Hyperliquid数据")
+
+        if not self.coinex_available:
+            self.logger.warning("CoinEx API实例无效，将无法获取CoinEx数据")
         
         # 设置Hyperliquid需要获取价格的币种列表
         if self.hyperliquid_available:
@@ -104,6 +112,14 @@ class DataManager:
                     "price": None,
                     "funding_rate": None,
                     "adjusted_funding_rate": None,
+                    "price_timestamp": None,
+                    "funding_timestamp": None
+                },
+                "coinex": {  # 添加CoinEx数据结构
+                    "symbol": get_coinex_symbol(symbol),
+                    "price": None,
+                    "funding_rate": None,
+                    "adjusted_funding_rate": None,  # 根据CoinEx结算周期可能需要调整
                     "price_timestamp": None,
                     "funding_timestamp": None
                 }
@@ -235,15 +251,62 @@ class DataManager:
                     self.logger.error(f"批量获取Backpack资金费率失败: {e}")
                     self.logger.info("将使用单个请求模式获取Backpack资金费率")
             
+            # 尝试使用批量方式获取CoinEx资金费率
+            if self.coinex_api:
+                try:
+                    # 检查是否有批量获取方法
+                    if hasattr(self.coinex_api, 'get_all_funding_rates'):
+                        self.logger.info("尝试批量获取CoinEx资金费率...")
+                        cx_rates = await self.coinex_api.get_all_funding_rates()
+                        
+                        if cx_rates and len(cx_rates) > 0:  # 如果成功获取数据
+                            self.logger.info(f"批量获取CoinEx资金费率成功，共{len(cx_rates)}个")
+                            
+                            # 更新数据存储
+                            updated_count = 0
+                            for symbol in self.symbols:
+                                # 在CoinEx中查找匹配的交易对
+                                cx_symbol = get_coinex_symbol(symbol)
+                                if cx_symbol in cx_rates:
+                                    rate = cx_rates[cx_symbol]
+                                    self.latest_data[symbol]["coinex"]["funding_rate"] = rate
+                                    # CoinEx可能有不同的结算周期，这里假设是8小时
+                                    self.latest_data[symbol]["coinex"]["adjusted_funding_rate"] = rate
+                                    self.latest_data[symbol]["coinex"]["funding_timestamp"] = datetime.now()
+                                    updated_count += 1
+                                    
+                                    # 使用摘要记录器收集资金费率信息
+                                    self.log_summarizer.record_funding_update(
+                                        symbol, "CoinEx", rate
+                                    )
+                                    
+                                    # 只有当资金费率相对较高时才单独记录
+                                    if abs(rate) > 0.0001:
+                                        self.rate_logger.log(
+                                            self.logger, "debug", f"cx_funding_{symbol}",
+                                            f"较高CoinEx {cx_symbol}资金费率: {rate}"
+                                        )
+                            
+                            self.logger.info(f"成功批量更新 {updated_count}/{len(self.symbols)} 个CoinEx币种的资金费率")
+                        else:
+                            self.logger.warning("批量获取CoinEx资金费率结果为空，将使用单个请求模式")
+                    else:
+                        self.logger.debug("CoinEx API不支持批量获取资金费率，将使用单个请求模式")
+                        
+                except Exception as e:
+                    self.logger.error(f"批量获取CoinEx资金费率失败: {e}")
+                    self.logger.info("将使用单个请求模式获取CoinEx资金费率")
+
             # 如果当前没有任何资金费率数据，则使用传统的单个请求获取
             need_traditional_update = False
             
             for symbol in self.symbols:
                 hl_data = self.latest_data[symbol]["hyperliquid"]
                 bp_data = self.latest_data[symbol]["backpack"]
+                cx_data = self.latest_data[symbol]["coinex"]
                 
                 # 检查是否有任何交易所缺少数据
-                if hl_data["funding_rate"] is None or bp_data["funding_rate"] is None:
+                if hl_data["funding_rate"] is None or bp_data["funding_rate"] is None or cx_data["funding_rate"] is None:
                     need_traditional_update = True
                     break
             
@@ -303,6 +366,32 @@ class DataManager:
                             self.logger.error(f"获取Backpack {symbol}资金费率失败: {e}")
                             self.log_summarizer.record_error("bp_funding_error")
             
+            # 尝试从CoinEx获取资金费率(针对缺失的数据)
+            if self.coinex_api and self.latest_data[symbol]["coinex"]["funding_rate"] is None:
+                try:
+                    # 在CoinEx中查找匹配的交易对
+                    for coinex_symbol in self.coinex_symbols_map.get(symbol, []):
+                        funding_rate = await self.coinex_api.get_funding_rate(coinex_symbol)
+                        # 更新资金费率
+                        if funding_rate is not None:
+                            self.latest_data[symbol]["coinex"]["funding_rate"] = funding_rate
+                            self.latest_data[symbol]["coinex"]["adjusted_funding_rate"] = funding_rate  # 根据CoinEx结算周期可能需要调整
+                            self.latest_data[symbol]["coinex"]["funding_timestamp"] = datetime.now()
+                            
+                            # 使用摘要记录器收集资金费率信息
+                            self.log_summarizer.record_funding_update(
+                                symbol, "CoinEx", funding_rate
+                            )
+                            
+                            # 只有当资金费率相对较高时才单独记录
+                            if abs(funding_rate) > 0.0001:
+                                self.rate_logger.log(
+                                    self.logger, "debug", f"cx_funding_{symbol}",
+                                    f"较高CoinEx {coinex_symbol}资金费率: {funding_rate}"
+                                )
+                except Exception as e:
+                    self.logger.error(f"获取CoinEx {symbol}资金费率失败: {e}")
+                    self.log_summarizer.record_error("cx_funding_error")
             # 使用频率限制记录更新完成信息
             self.rate_logger.log(self.logger, "info", "funding_complete", "资金费率更新完成")
         except Exception as e:
@@ -368,6 +457,32 @@ class DataManager:
                     except Exception as e:
                         self.logger.error(f"获取Backpack {symbol}价格失败: {e}")
                         self.log_summarizer.record_error("bp_price_error")
+                
+                # 更新CoinEx价格
+            if self.coinex_available:
+                for symbol in self.symbols:
+                    try:
+                        # 从CoinEx API获取价格
+                        price = await self.coinex_api.get_price(symbol)
+                        if price is not None:
+                            # 记录旧价格用于日志
+                            old_price = self.latest_data[symbol]["coinex"]["price"]
+                            
+                            # 更新价格
+                            self.latest_data[symbol]["coinex"]["price"] = price
+                            self.latest_data[symbol]["coinex"]["price_timestamp"] = datetime.now()
+                            
+                            # 记录价格变化（使用摘要记录器）
+                            if old_price is not None and old_price != price:
+                                self.log_summarizer.record_price_update(
+                                    symbol, "CoinEx", old_price, price
+                                )
+                    except Exception as e:
+                        self.logger.error(f"获取CoinEx {symbol}价格失败: {e}")
+                        self.log_summarizer.record_error("cx_price_error")
+            
+            # 使用频率限制记录更新完成信息
+            self.rate_logger.log(self.logger, "debug", "price_update", "价格更新完成")
         except Exception as e:
             self.logger.error(f"更新价格过程中发生错误: {e}")
             self.log_summarizer.record_error("price_update_error")
@@ -416,6 +531,7 @@ class DataManager:
         # 如果某个交易所不可用，则忽略其数据检查
         backpack_check = True
         hyperliquid_check = True
+        coinex_check = True
         
         # 检查Backpack数据
         if self.backpack_available:
@@ -446,20 +562,51 @@ class DataManager:
                 
                 if hl_price_age > max_age_seconds or hl_funding_age > max_age_seconds:
                     hyperliquid_check = False
+
+         # 检查CoinEx数据
+        if self.coinex_available:
+            cx_data = data["coinex"]
+            if (cx_data["price"] is None or 
+                cx_data["funding_rate"] is None or 
+                cx_data["price_timestamp"] is None or 
+                cx_data["funding_timestamp"] is None):
+                coinex_check = False
+            else:
+                cx_price_age = (now - cx_data["price_timestamp"]).total_seconds()
+                cx_funding_age = (now - cx_data["funding_timestamp"]).total_seconds()
+                
+                if cx_price_age > max_age_seconds or cx_funding_age > max_age_seconds:
+                    coinex_check = False
         
         # 根据可用交易所的数量返回结果
-        if self.backpack_available and self.hyperliquid_available:
-            # 两个交易所都可用时，需要两个都有效
-            return backpack_check and hyperliquid_check
-        elif self.backpack_available:
-            # 只有Backpack可用时，只检查Backpack
-            return backpack_check
-        elif self.hyperliquid_available:
-            # 只有Hyperliquid可用时，只检查Hyperliquid
-            return hyperliquid_check
-        else:
-            # 都不可用时返回False
+        available_exchanges_count = sum([
+            self.backpack_available,
+            self.hyperliquid_available,
+            self.coinex_available
+        ])
+
+        valid_exchanges_count = sum([
+            backpack_check if self.backpack_available else False,
+            hyperliquid_check if self.hyperliquid_available else False,
+            coinex_check if self.coinex_available else False
+        ])
+        
+        # 至少需要一个交易所有效数据
+        if available_exchanges_count == 0:
             return False
+        
+        # 如果只有一个交易所可用，则只检查该交易所
+        if available_exchanges_count == 1:
+            if self.backpack_available:
+                return backpack_check
+            elif self.hyperliquid_available:
+                return hyperliquid_check
+            elif self.coinex_available:
+                return coinex_check
+        
+        # 如果有多个交易所可用，至少需要两个有效数据
+        # 这样可以确保有足够的数据进行套利比较
+        return valid_exchanges_count >= 2
     
     async def close(self):
         """关闭数据管理器"""

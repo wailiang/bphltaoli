@@ -103,14 +103,17 @@ class DisplayManager:
         table.add_column("币种", style="cyan", justify="center")
         table.add_column("BP价格", style="green", justify="right")
         table.add_column("HL价格", style="green", justify="right")
+        table.add_column("CX价格", style="green", justify="right")  # 添加CoinEx价格列
         table.add_column("价格差%", style="yellow", justify="right")
         table.add_column("BP费率(8h)", style="blue", justify="right")
         table.add_column("HL原始(1h)", style="blue", justify="right")
         table.add_column("HL调整(8h)", style="blue", justify="right")
+        table.add_column("CX费率(8h)", style="blue", justify="right")  # 添加CoinEx费率列
         table.add_column("费率差%", style="magenta", justify="right")
         table.add_column("总滑点%", style="red", justify="right")
         table.add_column("BP方向", style="red", justify="center")
         table.add_column("HL方向", style="red", justify="center")
+        table.add_column("CX方向", style="red", justify="center")  # 添加CoinEx方向列
         
         try:
             # 计数有效数据
@@ -126,6 +129,7 @@ class DisplayManager:
             for symbol, symbol_data in data.items():
                 bp_data = symbol_data.get("backpack", {})
                 hl_data = symbol_data.get("hyperliquid", {})
+                cx_data = symbol_data.get("coinex", {})  # 获取CoinEx数据
                 
                 if not isinstance(bp_data, dict):
                     self.logger.warning(f"BP数据格式错误: {bp_data}")
@@ -135,29 +139,41 @@ class DisplayManager:
                     self.logger.warning(f"HL数据格式错误: {hl_data}")
                     hl_data = {"price": None, "funding_rate": None}
                 
+                if not isinstance(cx_data, dict):
+                    self.logger.warning(f"CX数据格式错误: {cx_data}")
+                    cx_data = {"price": None, "funding_rate": None}
+                
                 # 获取价格，确保数据有效
                 bp_price = bp_data.get("price")
                 hl_price = hl_data.get("price")
+                cx_price = cx_data.get("price")  # 获取CoinEx价格
                 
-                if bp_price is not None or hl_price is not None:
+                if bp_price is not None or hl_price is not None or cx_price is not None:
                     valid_data_count += 1
                 
-                # 计算价格差
+                # 计算价格差 (使用有效的价格对进行计算)
+                price_diff = 0
                 if bp_price and hl_price:
                     price_diff = (bp_price - hl_price) / hl_price * 100
-                else:
-                    price_diff = 0
+                elif bp_price and cx_price:
+                    price_diff = (bp_price - cx_price) / cx_price * 100
+                elif hl_price and cx_price:
+                    price_diff = (hl_price - cx_price) / cx_price * 100
                     
                 # 计算资金费率差
                 bp_funding = bp_data.get("funding_rate")
                 hl_funding = hl_data.get("funding_rate")
                 adjusted_hl_funding = hl_data.get("adjusted_funding_rate")  # 直接使用存储的调整后资金费率
+                cx_funding = cx_data.get("funding_rate")  # 获取CoinEx资金费率
                 
-                # 计算调整后的资金费率差
+                # 计算调整后的资金费率差 (考虑所有可能的交易所组合)
+                funding_diff = 0
                 if bp_funding is not None and adjusted_hl_funding is not None:
                     funding_diff = (bp_funding - adjusted_hl_funding) * 100
-                else:
-                    funding_diff = 0
+                elif bp_funding is not None and cx_funding is not None:
+                    funding_diff = (bp_funding - cx_funding) * 100
+                elif adjusted_hl_funding is not None and cx_funding is not None:
+                    funding_diff = (adjusted_hl_funding - cx_funding) * 100
                 
                 # 计算资金费率差的绝对值用于排序
                 funding_diff_abs = abs(funding_diff)
@@ -175,10 +191,29 @@ class DisplayManager:
                     self.logger.debug(f"{symbol}的流动性分析数据键: {list(liquidity_analysis.keys()) if liquidity_analysis else 'None'}")
                     
                     if liquidity_analysis:
-                        # 确定做多和做空的交易所
-                        if bp_funding and adjusted_hl_funding:
-                            long_exchange = "hyperliquid" if bp_funding > adjusted_hl_funding else "backpack"
-                            short_exchange = "backpack" if long_exchange == "hyperliquid" else "hyperliquid"
+                        # 确定做多和做空的交易所 (考虑三个交易所)
+                        exchanges_with_data = []
+                        funding_rates = []
+                        
+                        if bp_funding is not None:
+                            exchanges_with_data.append("backpack")
+                            funding_rates.append(bp_funding)
+                        
+                        if adjusted_hl_funding is not None:
+                            exchanges_with_data.append("hyperliquid")
+                            funding_rates.append(adjusted_hl_funding)
+                            
+                        if cx_funding is not None:
+                            exchanges_with_data.append("coinex")
+                            funding_rates.append(cx_funding)
+                            
+                        if len(exchanges_with_data) >= 2:
+                            # 找出资金费率最低和最高的交易所
+                            min_idx = funding_rates.index(min(funding_rates))
+                            max_idx = funding_rates.index(max(funding_rates))
+                            
+                            long_exchange = exchanges_with_data[min_idx]  # 资金费率低的做多
+                            short_exchange = exchanges_with_data[max_idx]  # 资金费率高的做空
                         else:
                             # 默认设置
                             long_exchange = "hyperliquid"
@@ -203,22 +238,26 @@ class DisplayManager:
                 # 获取持仓信息（如果存在）
                 bp_position_side = symbol_data.get("bp_position_side", None)
                 hl_position_side = symbol_data.get("hl_position_side", None)
+                cx_position_side = symbol_data.get("cx_position_side", None)  # 获取CoinEx持仓方向
                 
                 # 存储行数据和排序值
                 row_data = {
                     "symbol": symbol,
                     "bp_price": bp_price,
                     "hl_price": hl_price,
+                    "cx_price": cx_price,  # 添加CoinEx价格
                     "price_diff": price_diff,
                     "bp_funding": bp_funding,
                     "hl_funding": hl_funding,
                     "adjusted_hl_funding": adjusted_hl_funding,
+                    "cx_funding": cx_funding,  # 添加CoinEx资金费率
                     "funding_diff": funding_diff,
                     "funding_diff_abs": funding_diff_abs,  # 用于排序的绝对值
                     "total_slippage": total_slippage,
                     "has_position": symbol_data.get("position"),
                     "bp_position_side": bp_position_side,
-                    "hl_position_side": hl_position_side
+                    "hl_position_side": hl_position_side,
+                    "cx_position_side": cx_position_side  # 添加CoinEx持仓方向
                 }
                 rows_data.append(row_data)
             
@@ -231,14 +270,17 @@ class DisplayManager:
                     row["symbol"],
                     f"{row['bp_price']:.2f}" if row['bp_price'] is not None else "N/A",
                     f"{row['hl_price']:.2f}" if row['hl_price'] is not None else "N/A",
-                    f"{row['price_diff']:+.4f}" if row['bp_price'] and row['hl_price'] else "N/A",
+                    f"{row['cx_price']:.2f}" if row['cx_price'] is not None else "N/A",  # 添加CoinEx价格
+                    f"{row['price_diff']:+.4f}" if row['price_diff'] != 0 else "N/A",
                     f"{row['bp_funding']:.6f}" if row['bp_funding'] is not None else "0.000000",
                     f"{row['hl_funding']:.6f}" if row['hl_funding'] is not None else "0.000000",
                     f"{row['adjusted_hl_funding']:.6f}" if row['adjusted_hl_funding'] is not None else "0.000000",
-                    f"{row['funding_diff']:+.6f}" if row['bp_funding'] is not None and row['adjusted_hl_funding'] is not None else "0.000000",
+                    f"{row['cx_funding']:.6f}" if row['cx_funding'] is not None else "0.000000",  # 添加CoinEx资金费率
+                    f"{row['funding_diff']:+.6f}" if row['funding_diff'] != 0 else "0.000000",
                     f"{row['total_slippage']:.4f}" if row['total_slippage'] is not None else "N/A",
                     "多" if row['bp_position_side'] == "BUY" else "空" if row['bp_position_side'] == "SELL" else "-",
-                    "多" if row['hl_position_side'] == "BUY" else "空" if row['hl_position_side'] == "SELL" else "-"
+                    "多" if row['hl_position_side'] == "BUY" else "空" if row['hl_position_side'] == "SELL" else "-",
+                    "多" if row['cx_position_side'] == "BUY" else "空" if row['cx_position_side'] == "SELL" else "-"  # 添加CoinEx持仓方向
                 )
         
             # 创建订单统计信息表格
@@ -351,4 +393,4 @@ class DisplayManager:
             
         except Exception as e:
             self.logger.error(f"更新订单统计时出错: {e}")
-            # 出错也不中断程序 
+            # 出错也不中断程序

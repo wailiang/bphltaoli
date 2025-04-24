@@ -19,38 +19,44 @@ from datetime import datetime
 try:
     from funding_arbitrage_bot.exchanges.backpack_api import BackpackAPI
     from funding_arbitrage_bot.exchanges.hyperliquid_api import HyperliquidAPI
+    from funding_arbitrage_bot.exchanges.coinex_api import CoinExAPI
     from funding_arbitrage_bot.core.data_manager import DataManager
     from funding_arbitrage_bot.utils.display_manager import DisplayManager
     from funding_arbitrage_bot.utils.webhook_alerter import WebhookAlerter
     from funding_arbitrage_bot.utils.helpers import (
         calculate_funding_diff,
         get_backpack_symbol,
-        get_hyperliquid_symbol
+        get_hyperliquid_symbol,
+        get_coinex_symbol
     )
 # 当直接运行时尝试使用直接导入
 except ImportError:
     try:
         from exchanges.backpack_api import BackpackAPI
         from exchanges.hyperliquid_api import HyperliquidAPI
+        from exchanges.coinex_api import CoinExAPI
         from core.data_manager import DataManager
         from utils.display_manager import DisplayManager
         from utils.webhook_alerter import WebhookAlerter
         from utils.helpers import (
             calculate_funding_diff,
             get_backpack_symbol,
-            get_hyperliquid_symbol
+            get_hyperliquid_symbol,
+            get_coinex_symbol
         )
     # 如果以上都失败，尝试相对导入（当在包内运行时）
     except ImportError:
         from ..exchanges.backpack_api import BackpackAPI
         from ..exchanges.hyperliquid_api import HyperliquidAPI
+        from ..exchanges.coinex_api import CoinExAPI
         from ..core.data_manager import DataManager
         from ..utils.display_manager import DisplayManager
         from ..utils.webhook_alerter import WebhookAlerter
         from ..utils.helpers import (
             calculate_funding_diff,
             get_backpack_symbol,
-            get_hyperliquid_symbol
+            get_hyperliquid_symbol,
+            get_coinex_symbol
         )
 
 
@@ -62,6 +68,7 @@ class ArbitrageEngine:
         config: Dict[str, Any],
         backpack_api: BackpackAPI,
         hyperliquid_api: HyperliquidAPI,
+        coinex_api: CoinExAPI,
         logger: Optional[logging.Logger] = None
     ):
         """
@@ -79,11 +86,13 @@ class ArbitrageEngine:
         # 初始化API实例
         self.backpack_api = backpack_api
         self.hyperliquid_api = hyperliquid_api
+        self.coinex_api = coinex_api
 
         # 初始化数据管理器
         self.data_manager = DataManager(
             backpack_api=backpack_api,
             hyperliquid_api=hyperliquid_api,
+            coinex_api=coinex_api,
             symbols=config["strategy"]["symbols"],
             funding_update_interval=config["strategy"]["funding_update_interval"],
             logger=self.logger)
@@ -264,32 +273,51 @@ class ArbitrageEngine:
         保存开仓或平仓快照到文件
         
         Args:
-            symbol: 币种
+             symbol: 币种
             action: 操作类型，"open"或"close"
             bp_position: BP持仓信息
             hl_position: HL持仓信息
+            cx_position: CoinEx持仓信息
             bp_price: BP价格
             hl_price: HL价格
+            cx_price: CoinEx价格
             bp_funding: BP资金费率
             hl_funding: HL资金费率
+            cx_funding: CoinEx资金费率
         """
         try:
             # 准备快照数据
             timestamp = time.time()
             formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
-            price_diff = bp_price - hl_price
-            price_diff_percent = (price_diff / hl_price) * 100 if hl_price != 0 else 0
-            funding_diff = bp_funding - hl_funding
+
+             # 计算价格差异
+            bp_hl_price_diff = bp_price - hl_price
+            bp_cx_price_diff = bp_price - cx_price
+            hl_cx_price_diff = hl_price - cx_price
+
+            # 计算价格差异百分比
+            bp_hl_price_diff_percent = (bp_hl_price_diff / hl_price) * 100 if hl_price != 0 else 0
+            bp_cx_price_diff_percent = (bp_cx_price_diff / cx_price) * 100 if cx_price != 0 else 0
+            hl_cx_price_diff_percent = (hl_cx_price_diff / cx_price) * 100 if cx_price != 0 else 0
+
+             # 计算资金费率差异
+            bp_hl_funding_diff = bp_funding - hl_funding
+            bp_cx_funding_diff = bp_funding - cx_funding
+            hl_cx_funding_diff = hl_funding - cx_funding
             
             # 获取持仓方向
             bp_side = bp_position.get("side", "UNKNOWN") if bp_position else "UNKNOWN"
             hl_side = hl_position.get("side", "UNKNOWN") if hl_position else "UNKNOWN"
+            cx_side = cx_position.get("side", "UNKNOWN") if cx_position else "UNKNOWN"
             
             # 获取持仓数量
             bp_size = bp_position.get("size", 0) if bp_position else 0
             if "quantity" in bp_position and not bp_size:
                 bp_size = bp_position.get("quantity", 0)
             hl_size = hl_position.get("size", 0) if hl_position else 0
+            cx_size = cx_position.get("size", 0) if cx_position else 0
+            if "quantity" in cx_position and not cx_size:
+                cx_size = cx_position.get("quantity", 0)
             
             snapshot = {
                 "symbol": symbol,
@@ -298,15 +326,25 @@ class ArbitrageEngine:
                 "formatted_time": formatted_time,
                 "bp_side": bp_side,
                 "hl_side": hl_side,
+                "cx_side": cx_side,
                 "bp_size": bp_size,
                 "hl_size": hl_size,
+                "cx_size": cx_size,
                 "bp_price": bp_price,
                 "hl_price": hl_price,
-                "price_diff": price_diff,
-                "price_diff_percent": price_diff_percent,
+                "cx_price": cx_price,
+                "bp_hl_price_diff": bp_hl_price_diff,
+                "bp_cx_price_diff": bp_cx_price_diff,
+                "hl_cx_price_diff": hl_cx_price_diff,
+                "bp_hl_price_diff_percent": bp_hl_price_diff_percent,
+                "bp_cx_price_diff_percent": bp_cx_price_diff_percent,
+                "hl_cx_price_diff_percent": hl_cx_price_diff_percent,
                 "bp_funding": bp_funding,
                 "hl_funding": hl_funding,
-                "funding_diff": funding_diff
+                "cx_funding": cx_funding,
+                "bp_hl_funding_diff": bp_hl_funding_diff,
+                "bp_cx_funding_diff": bp_cx_funding_diff,
+                "hl_cx_funding_diff": hl_cx_funding_diff
             }
             
             # 保存到文件
@@ -368,17 +406,28 @@ class ArbitrageEngine:
                     bp_positions = await self.backpack_api.get_positions()
                     hl_positions = await self.hyperliquid_api.get_positions()
 
+                    # 获取CoinEx持仓信息（如果已配置）
+                    cx_positions = {}
+                    if self.coinex_api:
+                        try:
+                            cx_positions = await self.coinex_api.get_positions()
+                            self.logger.info(f"获取到CoinEx持仓信息: {cx_positions}")
+                        except Exception as e:
+                            self.logger.error(f"获取CoinEx持仓信息失败: {e}")
+
                     # 添加持仓信息到市场数据中，以便在表格中显示
                     for symbol in market_data:
                         bp_symbol = get_backpack_symbol(symbol)
+                        cx_symbol = symbol
                         has_position = (
                             bp_symbol in bp_positions) or (
-                            symbol in hl_positions)
+                            symbol in hl_positions) or (
+                            cx_symbol in cx_positions)
                         market_data[symbol]["position"] = has_position
 
                     # 更新持仓方向信息
                     market_data = self._update_position_direction_info(
-                        market_data, bp_positions, hl_positions)
+                        market_data, bp_positions, hl_positions, cx_positions)
 
                     # 使用直接的系统输出检查数据
                     print(f"更新市场数据: {len(market_data)}项", file=sys.__stdout__)
@@ -401,7 +450,8 @@ class ArbitrageEngine:
                             open_candidates,
                             close_candidates,
                             bp_positions,
-                            hl_positions
+                            hl_positions,
+                            cx_positions
                         )
 
                     # 批量执行开仓操作
@@ -415,7 +465,8 @@ class ArbitrageEngine:
                                     candidate["funding_diff"],
                                     candidate["bp_funding"],
                                     candidate["hl_funding"],
-                                    candidate["available_size"]
+                                    candidate["available_size"],
+                                    candidate["cx_funding"]
                                 )
                                 # 每次开仓后添加短暂延迟，避免API限制但又不至于等待太久
                                 await asyncio.sleep(0.5)
@@ -628,7 +679,8 @@ class ArbitrageEngine:
         open_candidates: list,
         close_candidates: list,
         bp_positions: dict,
-        hl_positions: dict
+        hl_positions: dict,
+        cx_positions: dict = None
     ):
         """
         收集套利机会，但不立即执行，而是将满足条件的币种添加到候选列表中
@@ -639,8 +691,14 @@ class ArbitrageEngine:
             close_candidates: 存储满足平仓条件的币种信息的列表
             bp_positions: Backpack持仓信息
             hl_positions: Hyperliquid持仓信息
+            cx_positions: CoinEx持仓信息（可选）
         """
         try:
+
+            # 初始化CoinEx持仓信息（如果未提供）
+            if cx_positions is None:
+                cx_positions = {}
+
             # 获取最新数据
             data = await self.data_manager.get_data(symbol)
 
@@ -652,151 +710,381 @@ class ArbitrageEngine:
             # 提取价格和资金费率
             bp_data = data["backpack"]
             hl_data = data["hyperliquid"]
+            cx_data = data["coinex"]
 
             bp_price = bp_data["price"]
             bp_funding = bp_data["funding_rate"]
             hl_price = hl_data["price"]
             hl_funding = hl_data["funding_rate"]
+            cx_price = cx_data["price"]
+            cx_funding = cx_data["funding_rate"]
 
             # 调整Hyperliquid资金费率以匹配Backpack的8小时周期
             adjusted_hl_funding = hl_funding * 8
 
+            # 调整CoinEx资金费率（如果有）
+            adjusted_cx_funding = None
+            if cx_funding is not None:
+                # 根据CoinEx的结算周期调整资金费率
+                # 假设CoinEx是8小时结算，如果不是，需要相应调整
+                adjusted_cx_funding = cx_funding
+
             # 计算价格差异（百分比）
             price_diff_percent = (bp_price - hl_price) / hl_price * 100
+
+            # 计算CoinEx与其他交易所的价格差异（如果有CoinEx价格）
+            cx_bp_price_diff_percent = None
+            cx_hl_price_diff_percent = None
+            if cx_price is not None:
+                cx_bp_price_diff_percent = (cx_price - bp_price) / bp_price * 100
+                cx_hl_price_diff_percent = (cx_price - hl_price) / hl_price * 100
 
             # 计算资金费率差异
             funding_diff, funding_diff_sign = calculate_funding_diff(
                 bp_funding, hl_funding)
             funding_diff_percent = funding_diff * 100  # 转为百分比
 
+            # 计算CoinEx与其他交易所的资金费率差异（如果有CoinEx资金费率）
+            cx_bp_funding_diff = None
+            cx_bp_funding_diff_sign = 0
+            cx_hl_funding_diff = None
+            cx_hl_funding_diff_sign = 0
+
+            if adjusted_cx_funding is not None and bp_funding is not None:
+                cx_bp_funding_diff, cx_bp_funding_diff_sign = calculate_funding_diff(
+                    adjusted_cx_funding, bp_funding)
+                
+            if adjusted_cx_funding is not None and adjusted_hl_funding is not None:
+                cx_hl_funding_diff, cx_hl_funding_diff_sign = calculate_funding_diff(
+                    adjusted_cx_funding, adjusted_hl_funding)
+
             bp_symbol = get_backpack_symbol(symbol)
+            cx_symbol = symbol
+
             has_position = (
                 bp_symbol in bp_positions) or (
-                symbol in hl_positions)
+                symbol in hl_positions) or (
+                cx_symbol in cx_positions)
 
             # 计算滑点信息
             # 确定做多和做空的交易所
-            long_exchange = "hyperliquid" if funding_diff_sign < 0 else "backpack"
-            short_exchange = "backpack" if funding_diff_sign < 0 else "hyperliquid"
+            # 这里需要考虑三个交易所的情况，选择资金费率最低和最高的
+            # long_exchange = "hyperliquid" if funding_diff_sign < 0 else "backpack"
+            # short_exchange = "backpack" if funding_diff_sign < 0 else "hyperliquid"
+            exchanges = []
+            funding_rates = []
 
             # 分析订单深度获取滑点信息
-            try:
-                # 获取交易金额
-                trade_size_usd = self.config["strategy"].get(
-                    "trade_size_usd", {}).get(symbol, 100)
+            # try:
+            #     # 获取交易金额
+            #     trade_size_usd = self.config["strategy"].get(
+            #         "trade_size_usd", {}).get(symbol, 100)
 
-                # 获取Hyperliquid订单深度数据
-                hl_orderbook = await self.hyperliquid_api.get_orderbook(symbol)
-                # 获取Backpack订单深度数据
-                bp_orderbook = await self.backpack_api.get_orderbook(symbol)
+            #     # 获取Hyperliquid订单深度数据
+            #     hl_orderbook = await self.hyperliquid_api.get_orderbook(symbol)
+            #     # 获取Backpack订单深度数据
+            #     bp_orderbook = await self.backpack_api.get_orderbook(symbol)
 
-                # 分析订单簿计算精确滑点
-                long_slippage = 0.05  # 默认值
-                short_slippage = 0.05  # 默认值
+            #     # 分析订单簿计算精确滑点
+            #     long_slippage = 0.05  # 默认值
+            #     short_slippage = 0.05  # 默认值
 
-                # 根据做多/做空交易所计算实际滑点
-                if long_exchange == "hyperliquid":
-                    long_slippage = self._analyze_orderbook(
-                        hl_orderbook, "bids", trade_size_usd, hl_price)
-                else:  # long_exchange == "backpack"
-                    long_slippage = self._analyze_orderbook(
-                        bp_orderbook, "bids", trade_size_usd, bp_price)
+            #     # 根据做多/做空交易所计算实际滑点
+            #     if long_exchange == "hyperliquid":
+            #         long_slippage = self._analyze_orderbook(
+            #             hl_orderbook, "bids", trade_size_usd, hl_price)
+            #     else:  # long_exchange == "backpack"
+            #         long_slippage = self._analyze_orderbook(
+            #             bp_orderbook, "bids", trade_size_usd, bp_price)
 
-                if short_exchange == "hyperliquid":
-                    short_slippage = self._analyze_orderbook(
-                        hl_orderbook, "asks", trade_size_usd, hl_price)
-                else:  # short_exchange == "backpack"
-                    short_slippage = self._analyze_orderbook(
-                        bp_orderbook, "asks", trade_size_usd, bp_price)
+            #     if short_exchange == "hyperliquid":
+            #         short_slippage = self._analyze_orderbook(
+            #             hl_orderbook, "asks", trade_size_usd, hl_price)
+            #     else:  # short_exchange == "backpack"
+            #         short_slippage = self._analyze_orderbook(
+            #             bp_orderbook, "asks", trade_size_usd, bp_price)
 
-                # 计算总滑点
-                total_slippage = long_slippage + short_slippage
+            #     # 计算总滑点
+            #     total_slippage = long_slippage + short_slippage
 
-                # 将滑点信息添加到市场数据中
-                market_data = self.data_manager.get_all_data()
-                if symbol in market_data:
-                    market_data[symbol]["total_slippage"] = total_slippage
-                    market_data[symbol]["long_slippage"] = long_slippage
-                    market_data[symbol]["short_slippage"] = short_slippage
-                    market_data[symbol]["long_exchange"] = long_exchange
-                    market_data[symbol]["short_exchange"] = short_exchange
+            #     # 将滑点信息添加到市场数据中
+            #     market_data = self.data_manager.get_all_data()
+            #     if symbol in market_data:
+            #         market_data[symbol]["total_slippage"] = total_slippage
+            #         market_data[symbol]["long_slippage"] = long_slippage
+            #         market_data[symbol]["short_slippage"] = short_slippage
+            #         market_data[symbol]["long_exchange"] = long_exchange
+            #         market_data[symbol]["short_exchange"] = short_exchange
 
-                    # 调试输出滑点信息
-                    self.logger.debug(
-                        f"{symbol}滑点分析: 总滑点={total_slippage:.4f}%, 做多({long_exchange})={long_slippage:.4f}%, 做空({short_exchange})={short_slippage:.4f}%")
+            #         # 调试输出滑点信息
+            #         self.logger.debug(
+            #             f"{symbol}滑点分析: 总滑点={total_slippage:.4f}%, 做多({long_exchange})={long_slippage:.4f}%, 做空({short_exchange})={short_slippage:.4f}%")
 
-                    # 更新显示（仅在计算滑点后）
-                    if self.display_manager:
-                        self.display_manager.update_market_data(market_data)
-            except Exception as e:
-                self.logger.error(f"计算{symbol}滑点信息时出错: {e}")
+            #         # 更新显示（仅在计算滑点后）
+            #         if self.display_manager:
+            #             self.display_manager.update_market_data(market_data)
+            # except Exception as e:
+            #     self.logger.error(f"计算{symbol}滑点信息时出错: {e}")
+
+            if bp_funding is not None:
+                exchanges.append("backpack")
+                funding_rates.append(bp_funding)
+                
+            if adjusted_hl_funding is not None:
+                exchanges.append("hyperliquid")
+                funding_rates.append(adjusted_hl_funding)
+                
+            if adjusted_cx_funding is not None:
+                exchanges.append("coinex")
+                funding_rates.append(adjusted_cx_funding)
+            
+            # 如果至少有两个交易所有数据，才能进行套利
+            if len(exchanges) >= 2:
+                # 找出资金费率最低和最高的交易所
+                min_idx = funding_rates.index(min(funding_rates))
+                max_idx = funding_rates.index(max(funding_rates))
+                
+                long_exchange = exchanges[min_idx]  # 资金费率低的做多
+                short_exchange = exchanges[max_idx]  # 资金费率高的做空
+                
+                # 分析订单深度获取滑点信息
+                try:
+                    # 获取交易金额
+                    trade_size_usd = self.config["strategy"].get(
+                        "trade_size_usd", {}).get(symbol, 100)
+
+                    # 获取各交易所订单深度数据
+                    hl_orderbook = await self.hyperliquid_api.get_orderbook(symbol)
+                    bp_orderbook = await self.backpack_api.get_orderbook(symbol)
+                    
+                    # 获取CoinEx订单深度数据（如果API可用）
+                    cx_orderbook = None
+                    if self.coinex_api:
+                        try:
+                            cx_orderbook = await self.coinex_api.get_orderbook(symbol)
+                        except Exception as e:
+                            self.logger.error(f"获取CoinEx {symbol}订单深度失败: {e}")
+
+                    # 分析订单簿计算精确滑点
+                    long_slippage = 0.05  # 默认值
+                    short_slippage = 0.05  # 默认值
+
+                    # 根据做多/做空交易所计算实际滑点
+                    if long_exchange == "hyperliquid":
+                        long_slippage = self._analyze_orderbook(
+                            hl_orderbook, "bids", trade_size_usd, hl_price)
+                    elif long_exchange == "backpack":
+                        long_slippage = self._analyze_orderbook(
+                            bp_orderbook, "bids", trade_size_usd, bp_price)
+                    elif long_exchange == "coinex" and cx_orderbook and cx_price:
+                        long_slippage = self._analyze_orderbook(
+                            cx_orderbook, "bids", trade_size_usd, cx_price)
+
+                    if short_exchange == "hyperliquid":
+                        short_slippage = self._analyze_orderbook(
+                            hl_orderbook, "asks", trade_size_usd, hl_price)
+                    elif short_exchange == "backpack":
+                        short_slippage = self._analyze_orderbook(
+                            bp_orderbook, "asks", trade_size_usd, bp_price)
+                    elif short_exchange == "coinex" and cx_orderbook and cx_price:
+                        short_slippage = self._analyze_orderbook(
+                            cx_orderbook, "asks", trade_size_usd, cx_price)
+
+                    # 计算总滑点
+                    total_slippage = long_slippage + short_slippage
+
+                    # 将滑点信息添加到市场数据中
+                    market_data = self.data_manager.get_all_data()
+                    if symbol in market_data:
+                        market_data[symbol]["total_slippage"] = total_slippage
+                        market_data[symbol]["long_slippage"] = long_slippage
+                        market_data[symbol]["short_slippage"] = short_slippage
+                        market_data[symbol]["long_exchange"] = long_exchange
+                        market_data[symbol]["short_exchange"] = short_exchange
+
+                        # 调试输出滑点信息
+                        self.logger.debug(
+                            f"{symbol}滑点分析: 总滑点={total_slippage:.4f}%, 做多({long_exchange})={long_slippage:.4f}%, 做空({short_exchange})={short_slippage:.4f}%")
+
+                        # 更新显示（仅在计算滑点后）
+                        if self.display_manager:
+                            self.display_manager.update_market_data(market_data)
+                except Exception as e:
+                    self.logger.error(f"计算{symbol}滑点信息时出错: {e}")
 
             # 记录当前状态和调整后的资金费率
-            self.logger.info(
-                f"{symbol} - 价格差: {price_diff_percent:.4f}%, "
-                f"资金费率差: {funding_diff_percent:.6f}%, "
-                f"BP: {bp_funding:.6f}(8h), HL原始: {hl_funding:.6f}(1h), HL调整后: {adjusted_hl_funding:.6f}(8h), "
-                f"持仓: {'是' if has_position else '否'}")
-
-            if not has_position:
-                # 没有仓位，检查是否满足开仓条件
-                should_open, reason, available_size = self._check_open_conditions_without_execution(
-                    symbol,
-                    bp_price,
-                    hl_price,
-                    bp_funding,
-                    adjusted_hl_funding,
-                    price_diff_percent,
-                    funding_diff,
-                    bp_positions,
-                    hl_positions
+            # self.logger.info(
+            #     f"{symbol} - 价格差: {price_diff_percent:.4f}%, "
+            #     f"资金费率差: {funding_diff_percent:.6f}%, "
+            #     f"BP: {bp_funding:.6f}(8h), HL原始: {hl_funding:.6f}(1h), HL调整后: {adjusted_hl_funding:.6f}(8h), "
+            #     f"持仓: {'是' if has_position else '否'}")
+                funding_info = (
+                    f"{symbol} - 价格差: {price_diff_percent:.4f}%, "
+                    f"资金费率差: {funding_diff_percent:.6f}%, "
+                    f"BP: {bp_funding:.6f}(8h), HL原始: {hl_funding:.6f}(1h), HL调整后: {adjusted_hl_funding:.6f}(8h)"
                 )
 
-                if should_open:
-                    self.logger.info(f"{symbol} - 决定纳入批量开仓候选，原因: {reason}")
-                    # 将满足开仓条件的币种信息添加到候选列表
-                    open_candidates.append({
-                        "symbol": symbol,
-                        "funding_diff": funding_diff,
-                        "bp_funding": bp_funding,
-                        "hl_funding": adjusted_hl_funding,
-                        "available_size": available_size,
-                        "reason": reason
-                    })
-                else:
-                    self.logger.debug(f"{symbol} - 不满足开仓条件，跳过")
-            else:
-                # 有仓位，检查是否满足平仓条件
-                bp_position = bp_positions.get(bp_symbol)
-                hl_position = hl_positions.get(symbol)
+                # 添加CoinEx信息（如果有）
+                if cx_funding is not None:
+                    funding_info += f", CX: {cx_funding:.6f}(8h)"
 
-                if bp_position and hl_position:
-                    should_close, reason, position = self._check_close_conditions_without_execution(
+                funding_info += f", 持仓: {'是' if has_position else '否'}"
+                self.logger.info(funding_info)
+
+                if not has_position:
+                    # 没有仓位，检查是否满足开仓条件
+                    should_open, reason, available_size = self._check_open_conditions_without_execution(
                         symbol,
-                        bp_position,
-                        hl_position,
                         bp_price,
                         hl_price,
                         bp_funding,
                         adjusted_hl_funding,
                         price_diff_percent,
                         funding_diff,
-                        funding_diff_sign
+                        bp_positions,
+                        hl_positions,
+                        cx_price,
+                        adjusted_cx_funding,
+                        cx_positions
                     )
 
-                    if should_close:
-                        self.logger.info(f"{symbol} - 决定纳入批量平仓候选，原因: {reason}")
-                        # 将满足平仓条件的币种信息添加到候选列表
-                        close_candidates.append({
+                    if should_open:
+                        self.logger.info(f"{symbol} - 决定纳入批量开仓候选，原因: {reason}")
+                        # 将满足开仓条件的币种信息添加到候选列表
+                        open_candidates.append({
                             "symbol": symbol,
-                            "position": position,
+                            "funding_diff": funding_diff,
+                            "bp_funding": bp_funding,
+                            "hl_funding": adjusted_hl_funding,
+                            "cx_funding": adjusted_cx_funding,
+                            "available_size": available_size,
                             "reason": reason
                         })
                     else:
-                        self.logger.debug(f"{symbol} - 不满足平仓条件，保持持仓")
+                        self.logger.debug(f"{symbol} - 不满足开仓条件，跳过")
+                else:
+                    # 有仓位，检查是否满足平仓条件
+                    bp_position = bp_positions.get(bp_symbol)
+                    hl_position = hl_positions.get(symbol)
+                    cx_position = cx_positions.get(cx_symbol)
 
+                    # 检查是否有任何两个交易所之间的仓位
+                    if (bp_position and hl_position) or (bp_position and cx_position) or (hl_position and cx_position):
+                        # 确定哪两个交易所有仓位
+                        position = None
+                        if bp_position and hl_position:
+                            should_close, reason, position = self._check_close_conditions_without_execution(
+                                symbol,
+                                bp_position,
+                                hl_position,
+                                bp_price,
+                                hl_price,
+                                bp_funding,
+                                adjusted_hl_funding,
+                                price_diff_percent,
+                                funding_diff,
+                                funding_diff_sign
+                            )
+                        elif bp_position and cx_position:
+                            # 需要实现BP和CX之间的平仓检查
+                            should_close, reason, position = self._check_close_conditions_without_execution(
+                                symbol,
+                                bp_position,
+                                cx_position,
+                                bp_price,
+                                cx_price,
+                                bp_funding,
+                                adjusted_cx_funding,
+                                cx_bp_price_diff_percent,
+                                cx_bp_funding_diff,
+                                cx_bp_funding_diff_sign,
+                                is_coinex=True
+                            )
+                        elif hl_position and cx_position:
+                            # 需要实现HL和CX之间的平仓检查
+                            should_close, reason, position = self._check_close_conditions_without_execution(
+                                symbol,
+                                hl_position,
+                                cx_position,
+                                hl_price,
+                                cx_price,
+                                adjusted_hl_funding,
+                                adjusted_cx_funding,
+                                cx_hl_price_diff_percent,
+                                cx_hl_funding_diff,
+                                cx_hl_funding_diff_sign,
+                                is_coinex=True
+                            )
+
+                        if should_close and position:
+                            self.logger.info(f"{symbol} - 决定纳入批量平仓候选，原因: {reason}")
+                            # 将满足平仓条件的币种信息添加到候选列表
+                            close_candidates.append({
+                                "symbol": symbol,
+                                "position": position,
+                                "reason": reason
+                            })
+                        else:
+                            self.logger.debug(f"{symbol} - 不满足平仓条件，保持持仓")
+
+            # if not has_position:
+            #     # 没有仓位，检查是否满足开仓条件
+            #     should_open, reason, available_size = self._check_open_conditions_without_execution(
+            #         symbol,
+            #         bp_price,
+            #         hl_price,
+            #         bp_funding,
+            #         adjusted_hl_funding,
+            #         price_diff_percent,
+            #         funding_diff,
+            #         bp_positions,
+            #         hl_positions
+            #     )
+
+            #     if should_open:
+            #         self.logger.info(f"{symbol} - 决定纳入批量开仓候选，原因: {reason}")
+            #         # 将满足开仓条件的币种信息添加到候选列表
+            #         open_candidates.append({
+            #             "symbol": symbol,
+            #             "funding_diff": funding_diff,
+            #             "bp_funding": bp_funding,
+            #             "hl_funding": adjusted_hl_funding,
+            #             "available_size": available_size,
+            #             "reason": reason
+            #         })
+            #     else:
+            #         self.logger.debug(f"{symbol} - 不满足开仓条件，跳过")
+            # else:
+                # 有仓位，检查是否满足平仓条件
+                # bp_position = bp_positions.get(bp_symbol)
+                # hl_position = hl_positions.get(symbol)
+
+                # if bp_position and hl_position:
+                #     should_close, reason, position = self._check_close_conditions_without_execution(
+                #         symbol,
+                #         bp_position,
+                #         hl_position,
+                #         bp_price,
+                #         hl_price,
+                #         bp_funding,
+                #         adjusted_hl_funding,
+                #         price_diff_percent,
+                #         funding_diff,
+                #         funding_diff_sign
+                #     )
+
+                #     if should_close:
+                #         self.logger.info(f"{symbol} - 决定纳入批量平仓候选，原因: {reason}")
+                #         # 将满足平仓条件的币种信息添加到候选列表
+                #         close_candidates.append({
+                #             "symbol": symbol,
+                #             "position": position,
+                #             "reason": reason
+                #         })
+                #     else:
+                #         self.logger.debug(f"{symbol} - 不满足平仓条件，保持持仓")
         except Exception as e:
-            self.logger.error(f"收集{symbol}套利机会异常: {e}", exc_info=True)
+           self.logger.error(f"收集{symbol}套利机会异常: {e}", exc_info=True)
 
     def _check_open_conditions_without_execution(
         self,
@@ -808,7 +1096,10 @@ class ArbitrageEngine:
         price_diff_percent: float,
         funding_diff: float,
         bp_positions: dict,
-        hl_positions: dict
+        hl_positions: dict,
+        cx_price: float = None,
+        cx_funding: float = None,
+        cx_positions: dict = None
     ):
         """
         检查是否满足开仓条件，但不执行开仓
@@ -823,13 +1114,20 @@ class ArbitrageEngine:
             funding_diff: 资金费率差异
             bp_positions: Backpack持仓信息
             hl_positions: Hyperliquid持仓信息
+            cx_price: CoinEx价格（可选）
+            cx_funding: CoinEx资金费率（可选）
+            cx_positions: CoinEx持仓信息（可选）
 
         Returns:
             tuple: (should_open, reason, available_size)
         """
         # 检查是否已有该币种的持仓
         bp_symbol = get_backpack_symbol(symbol)
+        cx_symbol = symbol  # CoinEx使用基础币种作为符号
         has_position = (bp_symbol in bp_positions) or (symbol in hl_positions)
+
+        if cx_positions and cx_symbol in cx_positions:
+            has_position = True
 
         if has_position:
             return False, "已有持仓", 0
@@ -871,6 +1169,11 @@ class ArbitrageEngine:
         # 统计Hyperliquid持仓币种
         for pos_symbol in hl_positions:
             position_symbols.add(pos_symbol)
+
+        # 统计CoinEx持仓币种
+        if cx_positions:
+            for pos_symbol in cx_positions:
+                position_symbols.add(pos_symbol)
 
         current_positions_count = len(position_symbols)
 
@@ -944,8 +1247,20 @@ class ArbitrageEngine:
         preferred_hl_side = None
 
         if check_direction_consistency and price_condition_met and funding_condition_met:
-            direction_consistent, preferred_bp_side, preferred_hl_side = self.check_direction_consistency(
-                symbol, bp_price, hl_price, bp_funding, adjusted_hl_funding)
+            if cx_price is not None and cx_funding is not None:
+                # 如果有CoinEx数据，使用三个交易所的方向一致性检查
+                direction_consistent, preferred_sides = self.check_direction_consistency_multi(
+                    symbol, bp_price, hl_price, cx_price, bp_funding, adjusted_hl_funding, cx_funding)
+
+                if direction_consistent:
+                    preferred_bp_side = preferred_sides.get("bp_side")
+                    preferred_hl_side = preferred_sides.get("hl_side")
+                    preferred_cx_side = preferred_sides.get("cx_side")
+
+            else:
+                # 如果没有CoinEx数据，使用原有的两个交易所方向一致性检查
+                direction_consistent, preferred_bp_side, preferred_hl_side = self.check_direction_consistency(
+                    symbol, bp_price, hl_price, bp_funding, adjusted_hl_funding)
 
             # 如果方向一致，使用资金费率套利的方向作为最终开仓方向
             if direction_consistent:
@@ -957,6 +1272,10 @@ class ArbitrageEngine:
                     "bp_side": preferred_bp_side,
                     "hl_side": preferred_hl_side
                 }
+                
+                # 添加CoinEx方向（如果有）
+                if preferred_cx_side:
+                    self.preferred_sides[symbol]["cx_side"] = preferred_cx_side
 
         # 根据条件类型决定是否开仓
         should_open = False
@@ -989,6 +1308,110 @@ class ArbitrageEngine:
             f"{', 方向一致性检查' + ('' if direction_consistent else '未') + '通过' if check_direction_consistency else ''}")
 
         return should_open, reason, available_size
+
+    def check_direction_consistency_multi(
+        self,
+        symbol: str,
+        bp_price: float,
+        hl_price: float,
+        cx_price: float,
+        bp_funding: float,
+        adjusted_hl_funding: float,
+        cx_funding: float
+    ):
+        """
+        检查三个交易所之间的方向一致性
+        
+        Args:
+            symbol: 基础币种，如 "BTC"
+            bp_price: Backpack价格
+            hl_price: Hyperliquid价格
+            cx_price: CoinEx价格
+            bp_funding: Backpack资金费率
+            adjusted_hl_funding: 调整后的Hyperliquid资金费率
+            cx_funding: CoinEx资金费率
+            
+        Returns:
+            tuple: (方向是否一致, 各交易所的建议方向字典)
+        """
+        # 获取资金费率配置
+        funding_config = self.config.get("funding_rate", {})
+        
+        # 获取各交易所资金费率权重
+        bp_weight = funding_config.get("bp_funding_rate_weight", 1.0)
+        hl_weight = funding_config.get("hl_funding_rate_weight", 1.0)
+        cx_weight = funding_config.get("cx_funding_rate_weight", 1.0)
+        
+        # 计算加权资金费率
+        weighted_bp_funding = bp_funding * bp_weight
+        weighted_hl_funding = adjusted_hl_funding * hl_weight
+        weighted_cx_funding = cx_funding * cx_weight
+        
+        # 找出资金费率最低和最高的交易所
+        funding_rates = [
+            (weighted_bp_funding, "backpack"),
+            (weighted_hl_funding, "hyperliquid"),
+            (weighted_cx_funding, "coinex")
+        ]
+        
+        # 按资金费率排序
+        funding_rates.sort(key=lambda x: x[0])
+        
+        # 最低和最高资金费率的交易所
+        lowest_funding_exchange = funding_rates[0][1]
+        highest_funding_exchange = funding_rates[-1][1]
+        
+        # 确定各交易所的建议方向
+        preferred_sides = {}
+        
+        # 资金费率低的交易所做多，资金费率高的交易所做空
+        for rate, exchange in funding_rates:
+            if exchange == lowest_funding_exchange:
+                if exchange == "backpack":
+                    preferred_sides["bp_side"] = "BUY"
+                elif exchange == "hyperliquid":
+                    preferred_sides["hl_side"] = "BUY"
+                elif exchange == "coinex":
+                    preferred_sides["cx_side"] = "BUY"
+            elif exchange == highest_funding_exchange:
+                if exchange == "backpack":
+                    preferred_sides["bp_side"] = "SELL"
+                elif exchange == "hyperliquid":
+                    preferred_sides["hl_side"] = "SELL"
+                elif exchange == "coinex":
+                    preferred_sides["cx_side"] = "SELL"
+            else:
+                # 中间的交易所不参与交易
+                if exchange == "backpack":
+                    preferred_sides["bp_side"] = "NONE"
+                elif exchange == "hyperliquid":
+                    preferred_sides["hl_side"] = "NONE"
+                elif exchange == "coinex":
+                    preferred_sides["cx_side"] = "NONE"
+        
+        # 检查是否至少有一对交易所方向相反（一个做多一个做空）
+        has_opposite_directions = False
+        if ("bp_side" in preferred_sides and "hl_side" in preferred_sides and
+            preferred_sides["bp_side"] != "NONE" and preferred_sides["hl_side"] != "NONE" and
+            preferred_sides["bp_side"] != preferred_sides["hl_side"]):
+            has_opposite_directions = True
+        elif ("bp_side" in preferred_sides and "cx_side" in preferred_sides and
+              preferred_sides["bp_side"] != "NONE" and preferred_sides["cx_side"] != "NONE" and
+              preferred_sides["bp_side"] != preferred_sides["cx_side"]):
+            has_opposite_directions = True
+        elif ("hl_side" in preferred_sides and "cx_side" in preferred_sides and
+              preferred_sides["hl_side"] != "NONE" and preferred_sides["cx_side"] != "NONE" and
+              preferred_sides["hl_side"] != preferred_sides["cx_side"]):
+            has_opposite_directions = True
+        
+        # 记录方向一致性检查结果
+        self.logger.debug(
+            f"{symbol} - 三交易所方向一致性检查: "
+            f"BP资金费率={bp_funding:.6f}, HL资金费率={adjusted_hl_funding:.6f}, CX资金费率={cx_funding:.6f}, "
+            f"建议方向: {preferred_sides}, 方向一致性: {has_opposite_directions}"
+        )
+        
+        return has_opposite_directions, preferred_sides
 
     def check_direction_consistency(
             self,
@@ -1066,7 +1489,11 @@ class ArbitrageEngine:
         adjusted_hl_funding: float,
         price_diff_percent: float,
         funding_diff: float,
-        funding_diff_sign: int
+        funding_diff_sign: int,
+        cx_position: dict = None,
+        cx_price: float = None,
+        cx_funding: float = None,
+        is_coinex: bool = False
     ):
         """
         检查是否满足平仓条件，但不执行平仓
@@ -1082,6 +1509,10 @@ class ArbitrageEngine:
             price_diff_percent: 价格差异（百分比）
             funding_diff: 资金费率差异
             funding_diff_sign: 资金费率差异符号
+            cx_position: CoinEx持仓信息（可选）
+            cx_price: CoinEx价格（可选）
+            cx_funding: CoinEx资金费率（可选）
+            is_coinex: 是否涉及CoinEx交易所（可选）
 
         Returns:
             tuple: (should_close, reason, position)
@@ -1105,25 +1536,66 @@ class ArbitrageEngine:
         
         # 资金费率差异符号变化条件已弃用，新增方向反转检查
         # 计算当前市场状况下的建议开仓方向
-        is_consistent, bp_current_side, hl_current_side = self.check_direction_consistency(
-            symbol, bp_price, hl_price, bp_funding, adjusted_hl_funding)
+        is_consistent = False
+        bp_current_side = None
+        hl_current_side = None
+        cx_current_side = None
+        
+        if cx_price and cx_funding:
+            # 如果有CoinEx数据，使用三个交易所的方向一致性检查
+            is_consistent, preferred_sides = self.check_direction_consistency_multi(
+                symbol, bp_price, hl_price, cx_price, bp_funding, adjusted_hl_funding, cx_funding)
+            
+            if preferred_sides:
+                bp_current_side = preferred_sides.get("bp_side")
+                hl_current_side = preferred_sides.get("hl_side")
+                cx_current_side = preferred_sides.get("cx_side")
+        else:
+            # 如果没有CoinEx数据，使用原有的两个交易所方向一致性检查
+            is_consistent, bp_current_side, hl_current_side = self.check_direction_consistency(
+                symbol, bp_price, hl_price, bp_funding, adjusted_hl_funding)
         
         # 从持仓获取实际开仓方向
-        bp_entry_side = bp_position.get("side", "UNKNOWN")
-        hl_entry_side = hl_position.get("side", "UNKNOWN")
+        bp_entry_side = bp_position.get("side", "UNKNOWN") if bp_position else "UNKNOWN"
+        hl_entry_side = hl_position.get("side", "UNKNOWN") if hl_position else "UNKNOWN"
+        cx_entry_side = cx_position.get("side", "UNKNOWN") if cx_position else "UNKNOWN"
         
         # 判断方向是否反转（现在建议的方向与开仓方向相反）
-        bp_direction_reversed = (bp_entry_side == "BUY" and bp_current_side == "SELL") or \
-                               (bp_entry_side == "SELL" and bp_current_side == "BUY")
-        hl_direction_reversed = (hl_entry_side == "BUY" and hl_current_side == "SELL") or \
-                               (hl_entry_side == "SELL" and hl_current_side == "BUY")
+        bp_direction_reversed = False
+        if bp_entry_side != "UNKNOWN" and bp_current_side:
+            bp_direction_reversed = (bp_entry_side == "BUY" and bp_current_side == "SELL") or \
+                                   (bp_entry_side == "SELL" and bp_current_side == "BUY")
         
-        # 方向反转条件：双向反转且方向一致
-        direction_reversed = bp_direction_reversed and hl_direction_reversed and is_consistent
+        hl_direction_reversed = False
+        if hl_entry_side != "UNKNOWN" and hl_current_side:
+            hl_direction_reversed = (hl_entry_side == "BUY" and hl_current_side == "SELL") or \
+                                   (hl_entry_side == "SELL" and hl_current_side == "BUY")
+        
+        # 添加CoinEx方向反转检查
+        cx_direction_reversed = False
+        if cx_entry_side != "UNKNOWN" and cx_current_side:
+            cx_direction_reversed = (cx_entry_side == "BUY" and cx_current_side == "SELL") or \
+                                   (cx_entry_side == "SELL" and cx_current_side == "BUY")
+        
+        # 方向反转条件：根据持有的交易所组合判断
+        direction_reversed = False
+        
+        # 如果同时持有三个交易所的仓位
+        if bp_entry_side != "UNKNOWN" and hl_entry_side != "UNKNOWN" and cx_entry_side != "UNKNOWN":
+            direction_reversed = bp_direction_reversed and hl_direction_reversed and cx_direction_reversed and is_consistent
+        # 如果只持有Backpack和Hyperliquid的仓位
+        elif bp_entry_side != "UNKNOWN" and hl_entry_side != "UNKNOWN":
+            direction_reversed = bp_direction_reversed and hl_direction_reversed and is_consistent
+        # 如果持有Backpack和CoinEx的仓位
+        elif bp_entry_side != "UNKNOWN" and cx_entry_side != "UNKNOWN":
+            direction_reversed = bp_direction_reversed and cx_direction_reversed and is_consistent
+        # 如果持有Hyperliquid和CoinEx的仓位
+        elif hl_entry_side != "UNKNOWN" and cx_entry_side != "UNKNOWN":
+            direction_reversed = hl_direction_reversed and cx_direction_reversed and is_consistent
         
         self.logger.info(
-            f"{symbol} - 方向反转检查: 持仓方向(BP={bp_entry_side}, HL={hl_entry_side})，"
-            f"当前建议方向(BP={bp_current_side}, HL={hl_current_side})，"
+            f"{symbol} - 方向反转检查: 持仓方向(BP={bp_entry_side}, HL={hl_entry_side}, CX={cx_entry_side})，"
+            f"当前建议方向(BP={bp_current_side}, HL={hl_current_side}, CX={cx_current_side})，"
             f"方向反转={direction_reversed}，方向一致={is_consistent}"
         )
         
@@ -1202,11 +1674,17 @@ class ArbitrageEngine:
         position = {
             "bp_symbol": get_backpack_symbol(symbol),
             "hl_symbol": symbol,
-            "bp_side": bp_position["side"],
-            "hl_side": hl_position["side"],
-            "bp_size": bp_position["size"],
-            "hl_size": hl_position["size"]
+            "cx_symbol": symbol,  # CoinEx使用基础币种作为符号
+            "bp_side": bp_position["side"] if bp_position else None,
+            "hl_side": hl_position["side"] if hl_position else None,
+            "bp_size": bp_position["size"] if bp_position else 0,
+            "hl_size": hl_position["size"] if hl_position else 0
         }
+        
+        # 添加CoinEx持仓信息（如果有）
+        if cx_position:
+            position["cx_side"] = cx_position["side"]
+            position["cx_size"] = cx_position["size"]
 
         return should_close, reason, position
 
@@ -1216,7 +1694,8 @@ class ArbitrageEngine:
             funding_diff: float,
             bp_funding: float,
             hl_funding: float,
-            available_size: float = None):
+            available_size: float = None,
+            cx_funding: float = None):
         """
         开仓
 
@@ -1226,6 +1705,7 @@ class ArbitrageEngine:
             bp_funding: Backpack资金费率
             hl_funding: Hyperliquid资金费率
             available_size: 可用的剩余开仓量，如果为None则使用配置中的开仓数量
+            cx_funding: CoinEx资金费率（可选）
         """
         try:
             # 获取最新数据
@@ -1234,6 +1714,9 @@ class ArbitrageEngine:
             # 获取价格
             bp_price = data["backpack"]["price"]
             hl_price = data["hyperliquid"]["price"]
+            cx_price = None
+            if "coinex" in data:
+                cx_price = data["coinex"]["price"]
 
             if bp_price is None or hl_price is None:
                 self.logger.error(f"{symbol}价格数据无效，无法开仓")
@@ -1258,6 +1741,7 @@ class ArbitrageEngine:
             bp_size = available_size if available_size is not None else self.position_sizes[
                 symbol]
             hl_size = bp_size  # 两个交易所使用相同的开仓数量
+            cx_size = bp_size  # CoinEx也使用相同的开仓数量
 
             # 检查是否小于最小交易量
             if bp_size < min_volume:
@@ -1265,6 +1749,7 @@ class ArbitrageEngine:
                     f"{symbol}开仓数量({bp_size})小于最小交易量({min_volume})，已调整为最小交易量")
                 bp_size = min_volume
                 hl_size = min_volume
+                cx_size = min_volume
 
             # 检查是否超过最大持仓数量
             if max_position_size is not None and (bp_size > max_position_size):
@@ -1272,6 +1757,7 @@ class ArbitrageEngine:
                     f"{symbol}开仓数量({bp_size})超过最大持仓数量({max_position_size})，已调整为最大持仓数量")
                 bp_size = max_position_size
                 hl_size = max_position_size
+                cx_size = max_position_size
 
             # 计算资金费率差
             funding_diff, funding_diff_sign = calculate_funding_diff(
@@ -1299,6 +1785,7 @@ class ArbitrageEngine:
             bp_symbol = get_backpack_symbol(
                 symbol)  # 使用正确的交易对格式，如 BTC_USDC_PERP
             hl_symbol = get_hyperliquid_symbol(symbol)
+            cx_symbol = get_coinex_symbol(symbol)
 
             # 检查是否存在已经计算好的开仓方向
             if hasattr(
@@ -1307,12 +1794,73 @@ class ArbitrageEngine:
                 # 使用方向一致性检查时预先计算的方向
                 bp_side = self.preferred_sides[symbol]["bp_side"]
                 hl_side = self.preferred_sides[symbol]["hl_side"]
+                cx_side = self.preferred_sides[symbol].get("cx_side")
                 self.logger.info(
-                    f"{symbol} - 使用方向一致性检查确定的交易方向: BP={bp_side}, HL={hl_side}")
+                    f"{symbol} - 使用方向一致性检查确定的交易方向: BP={bp_side}, HL={hl_side}, CX={cx_side}")
 
                 # 使用完后清除，避免影响下次开仓
                 del self.preferred_sides[symbol]
             else:
+                # 确定交易方向
+                # 首先确定哪些交易所有可用的资金费率数据
+                exchanges = []
+                funding_rates = []
+                
+                if bp_funding is not None:
+                    exchanges.append("backpack")
+                    funding_rates.append(bp_funding)
+                    
+                if hl_funding is not None:
+                    # 调整Hyperliquid资金费率以匹配Backpack的8小时周期
+                    adjusted_hl_funding = hl_funding * 8
+                    exchanges.append("hyperliquid")
+                    funding_rates.append(adjusted_hl_funding)
+                    
+                if cx_funding is not None:
+                    # 根据CoinEx的结算周期调整资金费率（如果需要）
+                    exchanges.append("coinex")
+                    funding_rates.append(cx_funding)
+                
+                # 初始化交易方向
+                bp_side = None
+                hl_side = None
+                cx_side = None
+                
+                # 如果至少有两个交易所有数据，确定做多和做空的交易所
+                if len(exchanges) >= 2:
+                    # 找出资金费率最低和最高的交易所
+                    min_idx = funding_rates.index(min(funding_rates))
+                    max_idx = funding_rates.index(max(funding_rates))
+                    
+                    # 资金费率低的做多，高的做空
+                    for i, exchange in enumerate(exchanges):
+                        if i == min_idx:  # 资金费率最低的做多
+                            if exchange == "backpack":
+                                bp_side = "BUY"
+                            elif exchange == "hyperliquid":
+                                hl_side = "BUY"
+                            elif exchange == "coinex":
+                                cx_side = "BUY"
+                        elif i == max_idx:  # 资金费率最高的做空
+                            if exchange == "backpack":
+                                bp_side = "SELL"
+                            elif exchange == "hyperliquid":
+                                hl_side = "SELL"
+                            elif exchange == "coinex":
+                                cx_side = "SELL"
+                
+                # 如果只有两个交易所有数据，为第三个交易所设置默认方向
+                if "backpack" in exchanges and "hyperliquid" in exchanges and cx_funding is None:
+                    # 不使用CoinEx
+                    cx_side = None
+                elif "backpack" in exchanges and "coinex" in exchanges and hl_funding is None:
+                    # 不使用Hyperliquid
+                    hl_side = None
+                elif "hyperliquid" in exchanges and "coinex" in exchanges and bp_funding is None:
+                    # 不使用Backpack
+                    bp_side = None
+
+                # 如果没有足够的交易所数据，使用原始逻辑
                 # 修正资金费率套利逻辑
                 # 1. 当两个交易所资金费率正负相反时：负的做多，正的做空
                 # 2. 当两个交易所资金费率都为负时：绝对值大的做多，绝对值小的做空
@@ -1346,10 +1894,19 @@ class ArbitrageEngine:
             self.logger.info(
                 f"{symbol} - BP资金费率: {bp_funding:.6f}，方向: {bp_side}；HL资金费率: {hl_funding:.6f}，方向: {hl_side}")
 
+            if cx_funding is not None:
+                self.logger.info(f"{symbol} - CX资金费率: {cx_funding:.6f}，方向: {cx_side}")
+
             # 获取交易前的持仓状态
             self.logger.info(f"获取{symbol}开仓前的持仓状态")
             pre_bp_positions = await self.backpack_api.get_positions()
             pre_hl_positions = await self.hyperliquid_api.get_positions()
+            pre_cx_positions = {}
+            if self.coinex_api and cx_side is not None:
+                try:
+                    pre_cx_positions = await self.coinex_api.get_positions()
+                except Exception as e:
+                    self.logger.error(f"获取CoinEx持仓信息失败: {e}")
 
             # 记录开仓前的持仓状态
             pre_bp_position = None
@@ -1364,12 +1921,20 @@ class ArbitrageEngine:
                     pre_hl_position = pos
                     break
 
+            pre_cx_position = None
+            for pos in pre_cx_positions.values():
+                if pos.get("symbol") == cx_symbol:
+                    pre_cx_position = pos
+                    break
+
             self.logger.info(
-                f"开仓前持仓: BP {bp_symbol}={pre_bp_position}, HL {hl_symbol}={pre_hl_position}")
+                f"开仓前持仓: BP {bp_symbol}={pre_bp_position}, HL {hl_symbol}={pre_hl_position}, CX {cx_symbol}={pre_cx_position}")
 
             # ===== 同时下单 =====
             self.logger.info(
-                f"同时在两个交易所为{symbol}下单: BP {bp_side} {bp_size}, HL {hl_side} {hl_size}")
+                f"同时在交易所为{symbol}下单: BP {bp_side} {bp_size}, HL {hl_side} {hl_size}")
+            if cx_side is not None:
+                self.logger.info(f"CoinEx {cx_side} {cx_size}")
 
             # 获取价格精度和tick_size
             price_precision = trading_pair_config.get("price_precision", 3)
@@ -1383,45 +1948,99 @@ class ArbitrageEngine:
             hl_limit_price = round(hl_limit_price / tick_size) * tick_size
             hl_limit_price = round(hl_limit_price, price_precision)
 
+            # 在CoinEx下限价单（如果需要）
+            cx_limit_price = None
+            if cx_side is not None and cx_price is not None:
+                cx_price_adjuster = 1.005 if cx_side == "BUY" else 0.995
+                cx_limit_price = cx_price * cx_price_adjuster
+                cx_limit_price = round(cx_limit_price / tick_size) * tick_size
+                cx_limit_price = round(cx_limit_price, price_precision)
+                self.logger.info(
+                    f"使用限价单开仓CoinEx: 价格={cx_limit_price}, 精度={price_precision}, tick_size={tick_size}")
+
             self.logger.info(
                 f"使用限价单开仓Hyperliquid: 价格={hl_limit_price}, 精度={price_precision}, tick_size={tick_size}")
 
-            # 同时发送两个交易所的订单
-            bp_order_task = asyncio.create_task(
-                self.backpack_api.place_order(
-                    symbol=bp_symbol,  # 使用正确的交易对格式
-                    side=bp_side,
-                    size=bp_size,
-                    price=None,  # 市价单不需要价格
-                    order_type="MARKET"  # Backpack使用市价单
-                )
-            )
+            # 创建订单任务列表
+            order_tasks = []
 
-            hl_order_task = asyncio.create_task(
-                self.hyperliquid_api.place_order(
-                    symbol=hl_symbol,
-                    side=hl_side,
-                    size=hl_size,
-                    price=hl_limit_price,
-                    order_type="LIMIT"
+            # 同时发送两个交易所的订单
+            # 添加Backpack订单任务（如果需要）
+            if bp_side is not None:
+                bp_order_task = asyncio.create_task(
+                    self.backpack_api.place_order(
+                        symbol=bp_symbol,  # 使用正确的交易对格式
+                        side=bp_side,
+                        size=bp_size,
+                        price=None,  # 市价单不需要价格
+                        order_type="MARKET"  # Backpack使用市价单
+                    )
                 )
-            )
+                order_tasks.append(bp_order_task)
+            
+            # 添加Hyperliquid订单任务（如果需要）
+            if hl_side is not None:
+                hl_order_task = asyncio.create_task(
+                    self.hyperliquid_api.place_order(
+                        symbol=hl_symbol,
+                        side=hl_side,
+                        size=hl_size,
+                        price=hl_limit_price,
+                        order_type="LIMIT"
+                    )
+                )
+                order_tasks.append(hl_order_task)
+            
+            # 添加CoinEx订单任务（如果需要）
+            cx_order_task = None
+            if self.coinex_api and cx_side is not None and cx_limit_price is not None:
+                try:
+                    cx_order_task = asyncio.create_task(
+                        self.coinex_api.place_order(
+                            symbol=cx_symbol,
+                            side=cx_side,
+                            size=cx_size,
+                            price=cx_limit_price,
+                            order_type="LIMIT"
+                        )
+                    )
+                    order_tasks.append(cx_order_task)
+                except Exception as e:
+                    self.logger.error(f"创建CoinEx订单任务失败: {e}")
 
             # 等待订单结果
-            bp_result, hl_result = await asyncio.gather(
-                bp_order_task,
-                hl_order_task,
-                return_exceptions=True
-            )
+            # bp_result, hl_result = await asyncio.gather(
+            #     bp_order_task,
+            #     hl_order_task,
+            #     return_exceptions=True
+            # )
+            order_results = await asyncio.gather(*order_tasks, return_exceptions=True)
+
+            # 解析订单结果
+            bp_result = None
+            hl_result = None
+            cx_result = None
+
+            result_index = 0
+            if bp_side is not None:
+                bp_result = order_results[result_index]
+                result_index += 1
+            
+            if hl_side is not None:
+                hl_result = order_results[result_index]
+                result_index += 1
+                
+            if cx_order_task is not None:
+                cx_result = order_results[result_index]
 
             # 检查订单结果
-            bp_success = not isinstance(
+            bp_success = bp_side is not None and not isinstance(
                 bp_result, Exception) and bp_result is not None
 
             # 增强的Hyperliquid订单成功检查逻辑
             hl_success = False
             hl_order_id = None
-            if not isinstance(hl_result, Exception):
+            if hl_side is not None and not isinstance(hl_result, Exception):
                 if isinstance(hl_result, dict):
                     # 检查直接的success标志
                     if hl_result.get("success", False):
@@ -1461,16 +2080,40 @@ class ArbitrageEngine:
                                     f"提取订单ID时出错: {extract_error}")
                                 hl_order_id = "未能提取"
 
-            # 日志记录订单结果
-            if bp_success:
-                self.logger.info(f"Backpack下单成功: {bp_result}")
-            else:
-                self.logger.error(f"Backpack下单失败: {bp_result}")
+            # 检查CoinEx订单结果
+            cx_success = False
+            cx_order_id = None
+            if cx_side is not None and cx_result is not None and not isinstance(cx_result, Exception):
+                if isinstance(cx_result, dict):
+                    # 检查订单是否成功
+                    if cx_result.get("success", False) or cx_result.get("id"):
+                        cx_success = True
+                        cx_order_id = cx_result.get("id") or cx_result.get("order_id", "未知")
+                        self.logger.info(f"CoinEx订单成功，订单ID: {cx_order_id}")
+                        
+                        # 检查订单是否已立即成交
+                        if cx_result.get("status") == "filled" or cx_result.get("filled", 0) > 0:
+                            self.logger.info(
+                                f"CoinEx订单已立即成交，均价: {cx_result.get('price', '未知')}")
 
-            if hl_success:
-                self.logger.info(f"Hyperliquid下单成功: {hl_order_id}")
-            else:
-                self.logger.error(f"Hyperliquid下单失败: {hl_result}")
+            # 日志记录订单结果
+            if bp_side is not None:
+                if bp_success:
+                    self.logger.info(f"Backpack下单成功: {bp_result}")
+                else:
+                    self.logger.error(f"Backpack下单失败: {bp_result}")
+
+            if hl_side is not None:
+                if hl_success:
+                    self.logger.info(f"Hyperliquid下单成功: {hl_order_id}")
+                else:
+                    self.logger.error(f"Hyperliquid下单失败: {hl_result}")
+                    
+            if cx_side is not None:
+                if cx_success:
+                    self.logger.info(f"CoinEx下单成功: {cx_order_id}")
+                else:
+                    self.logger.error(f"CoinEx下单失败: {cx_result}")
 
             # ===== 验证持仓变化 =====
             # 等待3秒让交易所处理订单
@@ -1481,6 +2124,12 @@ class ArbitrageEngine:
             self.logger.info(f"获取{symbol}开仓后的持仓状态")
             post_bp_positions = await self.backpack_api.get_positions()
             post_hl_positions = await self.hyperliquid_api.get_positions()
+            post_cx_positions = {}
+            if self.coinex_api and cx_side is not None:
+                try:
+                    post_cx_positions = await self.coinex_api.get_positions()
+                except Exception as e:
+                    self.logger.error(f"获取CoinEx持仓信息失败: {e}")
 
             # 记录开仓后的持仓状态
             post_bp_position = None
@@ -1494,52 +2143,99 @@ class ArbitrageEngine:
                 if pos.get("symbol") == hl_symbol:
                     post_hl_position = pos
                     break
+            
+            post_cx_position = None
+            for pos in post_cx_positions.values():
+                if pos.get("symbol") == cx_symbol:
+                    post_cx_position = pos
+                    break
 
             self.logger.info(
-                f"开仓后持仓: BP {bp_symbol}={post_bp_position}, HL {hl_symbol}={post_hl_position}")
+                f"开仓后持仓: BP {bp_symbol}={post_bp_position}, HL {hl_symbol}={post_hl_position}, CX {cx_symbol}={post_cx_position}")
 
             # 验证持仓变化
             bp_position_changed = False
             hl_position_changed = False
+            cx_position_changed = False
 
             # 检查Backpack持仓变化
-            if pre_bp_position is None and post_bp_position is not None:
-                # 新建立了持仓
-                bp_position_changed = True
-                self.logger.info(
-                    f"Backpack成功建立{bp_symbol}新持仓: {post_bp_position}")
-            elif pre_bp_position is not None and post_bp_position is not None:
-                # 检查持仓大小是否变化
-                pre_size = float(pre_bp_position.get("quantity", 0))
-                post_size = float(post_bp_position.get("quantity", 0))
-                if abs(post_size - pre_size) >= 0.8 * bp_size:  # 允许80%的差异容忍度
+            if bp_side is not None:
+                if pre_bp_position is None and post_bp_position is not None:
+                    # 新建立了持仓
                     bp_position_changed = True
                     self.logger.info(
-                        f"Backpack {bp_symbol}持仓量变化: {pre_size} -> {post_size}")
+                        f"Backpack成功建立{bp_symbol}新持仓: {post_bp_position}")
+                elif pre_bp_position is not None and post_bp_position is not None:
+                    # 检查持仓大小是否变化
+                    pre_size = float(pre_bp_position.get("quantity", 0))
+                    post_size = float(post_bp_position.get("quantity", 0))
+                    if abs(post_size - pre_size) >= 0.8 * bp_size:  # 允许80%的差异容忍度
+                        bp_position_changed = True
+                        self.logger.info(
+                            f"Backpack {bp_symbol}持仓量变化: {pre_size} -> {post_size}")
 
             # 检查Hyperliquid持仓变化
-            if pre_hl_position is None and post_hl_position is not None:
-                # 新建立了持仓
-                hl_position_changed = True
-                self.logger.info(
-                    f"Hyperliquid成功建立{hl_symbol}新持仓: {post_hl_position}")
-            elif pre_hl_position is not None and post_hl_position is not None:
-                # 检查持仓大小是否变化
-                pre_size = float(pre_hl_position.get("size", 0))
-                post_size = float(post_hl_position.get("size", 0))
-                if abs(post_size - pre_size) >= 0.8 * hl_size:  # 允许80%的差异容忍度
+            if hl_side is not None:
+                if pre_hl_position is None and post_hl_position is not None:
+                    # 新建立了持仓
                     hl_position_changed = True
                     self.logger.info(
-                        f"Hyperliquid {hl_symbol}持仓量变化: {pre_size} -> {post_size}")
+                        f"Hyperliquid成功建立{hl_symbol}新持仓: {post_hl_position}")
+                elif pre_hl_position is not None and post_hl_position is not None:
+                    # 检查持仓大小是否变化
+                    pre_size = float(pre_hl_position.get("size", 0))
+                    post_size = float(post_hl_position.get("size", 0))
+                    if abs(post_size - pre_size) >= 0.8 * hl_size:  # 允许80%的差异容忍度
+                        hl_position_changed = True
+                        self.logger.info(
+                            f"Hyperliquid {hl_symbol}持仓量变化: {pre_size} -> {post_size}")
+
+            # 检查CoinEx持仓变化
+            if cx_side is not None:
+                if pre_cx_position is None and post_cx_position is not None:
+                    # 新建立了持仓
+                    cx_position_changed = True
+                    self.logger.info(
+                        f"CoinEx成功建立{cx_symbol}新持仓: {post_cx_position}")
+                elif pre_cx_position is not None and post_cx_position is not None:
+                    # 检查持仓大小是否变化
+                    pre_size = float(pre_cx_position.get("size", 0))
+                    post_size = float(post_cx_position.get("size", 0))
+                    if abs(post_size - pre_size) >= 0.8 * cx_size:  # 允许80%的差异容忍度
+                        cx_position_changed = True
+                        self.logger.info(
+                            f"CoinEx {cx_symbol}持仓量变化: {pre_size} -> {post_size}")
 
             # 根据持仓变化情况判断开仓成功与否
-            if bp_position_changed and hl_position_changed:
-                # 两个交易所都成功开仓
-                message = (
-                    f"开仓成功: \n"
-                    f"Backpack: {bp_side} {bp_size} {bp_symbol}\n"
-                    f"Hyperliquid: {hl_side} {hl_size} {hl_symbol}"
-                )
+            # 计算需要成功的交易所数量
+            required_exchanges = 0
+            if bp_side is not None:
+                required_exchanges += 1
+            if hl_side is not None:
+                required_exchanges += 1
+            if cx_side is not None:
+                required_exchanges += 1
+                
+            # 计算实际成功的交易所数量
+            successful_exchanges = 0
+            if bp_position_changed:
+                successful_exchanges += 1
+            if hl_position_changed:
+                successful_exchanges += 1
+            if cx_position_changed:
+                successful_exchanges += 1
+
+            # 判断是否所有需要的交易所都成功开仓
+            if successful_exchanges == required_exchanges and required_exchanges >= 2:
+                # 所有交易所都成功开仓
+                message = f"开仓成功: \n"
+                if bp_side is not None:
+                    message += f"Backpack: {bp_side} {bp_size} {bp_symbol}\n"
+                if hl_side is not None:
+                    message += f"Hyperliquid: {hl_side} {hl_size} {hl_symbol}\n"
+                if cx_side is not None:
+                    message += f"CoinEx: {cx_side} {cx_size} {cx_symbol}\n"
+
                 self.logger.info(message)
                 self.display_manager.add_order_message(message)
                 # 更新订单统计
@@ -1548,84 +2244,80 @@ class ArbitrageEngine:
                 # 记录开仓方向和时间
                 self.position_directions[symbol] = {
                     "bp_side": bp_side,
-                    "hl_side": hl_side
+                    "hl_side": hl_side,
+                    "cx_side": cx_side
                 }
                 self.position_open_times[symbol] = time.time()
                 
                 # 记录开仓价格和资金费率
                 self.entry_prices[symbol] = {
                     "bp_price": bp_price,
-                    "hl_price": hl_price
+                    "hl_price": hl_price,
+                    "cx_price": cx_price
                 }
                 self.entry_funding_rates[symbol] = {
                     "bp_funding": bp_funding,
-                    "hl_funding": hl_funding
+                    "hl_funding": hl_funding,
+                    "cx_funding": cx_funding
                 }
                 
                 # 保存开仓快照
                 self._save_position_snapshot(
                     symbol=symbol,
                     action="open",
-                    bp_position={"side": bp_side, "size": bp_size},
-                    hl_position={"side": hl_side, "size": hl_size},
+                    bp_position={"side": bp_side, "size": bp_size} if bp_side else None,
+                    hl_position={"side": hl_side, "size": hl_size} if hl_side else None,
+                    cx_position={"side": cx_side, "size": cx_size} if cx_side else None,
                     bp_price=bp_price,
                     hl_price=hl_price,
+                    cx_price=cx_price,
                     bp_funding=bp_funding,
-                    hl_funding=hl_funding
+                    hl_funding=hl_funding,
+                    cx_funding=cx_funding
                 )
                     
-                # 发送通知
+                # 发送开仓通知
                 if self.alerter:
-                    self.alerter.send_order_notification(
-                        symbol=symbol,
-                        action="开仓",
-                        quantity=bp_size,
-                        price=bp_price,
-                        side="多" if bp_side == "BUY" else "空",
-                        exchange="Backpack"
+                    exchanges = []
+                    if bp_side:
+                        exchanges.append(f"Backpack({bp_side})")
+                    if hl_side:
+                        exchanges.append(f"Hyperliquid({hl_side})")
+                    if cx_side:
+                        exchanges.append(f"CoinEx({cx_side})")
+                    
+                    message = (
+                        f"🚀 开仓: {symbol}\n"
+                        f"交易所: {', '.join(exchanges)}\n"
+                        f"仓位: {position_size}\n"
+                        f"资金费率差异: {funding_diff:.6f}\n"
+                        f"BP价格: {bp_price}\n"
+                        f"HL价格: {hl_price}\n"
                     )
-                return True
-
-            elif bp_position_changed and not hl_position_changed:
-                # 只有Backpack成功开仓，尝试平掉单边持仓
-                self.logger.warning(f"{symbol}只在Backpack开仓成功，尝试关闭单边持仓")
-                try:
-                    await self.backpack_api.close_position(bp_symbol)
-                    self.logger.info(f"已关闭Backpack上的{bp_symbol}单边持仓")
-                except Exception as e:
-                    self.logger.error(f"关闭Backpack单边持仓失败: {e}")
-                # 更新订单统计
-                self.display_manager.update_order_stats("open", False)
-                return False
-
-            elif not bp_position_changed and hl_position_changed:
-                # 只有Hyperliquid成功开仓，尝试平掉单边持仓
-                self.logger.warning(f"{symbol}只在Hyperliquid开仓成功，尝试关闭单边持仓")
-                try:
-                    close_side = "BUY" if hl_side == "SELL" else "SELL"
-                    await self.hyperliquid_api.place_order(
-                        symbol=hl_symbol,
-                        side=close_side,
-                        size=hl_size,
-                        price=None,
-                        order_type="MARKET"
+                    
+                    if cx_price:
+                        message += f"CX价格: {cx_price}\n"
+                        
+                    message += (
+                        f"BP-HL价差: {bp_hl_price_diff_percent:.2f}%\n"
                     )
-                    self.logger.info(f"已关闭Hyperliquid上的{hl_symbol}单边持仓")
-                except Exception as e:
-                    self.logger.error(f"关闭Hyperliquid单边持仓失败: {e}")
-                # 更新订单统计
-                self.display_manager.update_order_stats("open", False)
-                return False
-
-            else:
-                # 两个交易所都未成功开仓
-                self.logger.error(f"{symbol}在两个交易所均未成功开仓")
-                # 更新订单统计
-                self.display_manager.update_order_stats("open", False)
-                return False
+                    
+                    if cx_price:
+                        message += (
+                            f"BP-CX价差: {bp_cx_price_diff_percent:.2f}%\n"
+                            f"HL-CX价差: {hl_cx_price_diff_percent:.2f}%\n"
+                        )
+                        
+                    await self.alerter.send_alert(message)
+                
+                self.logger.info(
+                    f"{symbol} - 开仓完成: BP={bp_side}@{bp_price}, HL={hl_side}@{hl_price}, "
+                    f"CX={cx_side}@{cx_price if cx_price else 'N/A'}, "
+                    f"资金费率差异={funding_diff:.6f}, 仓位={position_size}"
+                )
 
         except Exception as e:
-            self.logger.error(f"{symbol}开仓过程发生异常: {e}")
+            self.logger.error(f"{symbol} - 开仓操作失败: {str(e)}")
             self.display_manager.add_order_message(f"{symbol}开仓过程发生异常: {e}")
             return False
 
@@ -1642,22 +2334,34 @@ class ArbitrageEngine:
             self.logger.info(message)
             self.display_manager.add_order_message(message)
             
-            # 获取仓位信息
+           # 获取仓位信息
             bp_symbol = position["bp_symbol"]
             hl_symbol = position["hl_symbol"]
+            cx_symbol = position["cx_symbol"]
+            
             bp_side = position["bp_side"]
             hl_side = position["hl_side"]
-            bp_size = float(position["bp_size"])  # 确保是浮点数
-            hl_size = float(position["hl_size"])  # 确保是浮点数
+            cx_side = position["cx_side"]
+            
+            bp_size = float(position["bp_size"]) if position["bp_size"] is not None else 0  # 确保是浮点数
+            hl_size = float(position["hl_size"]) if position["hl_size"] is not None else 0  # 确保是浮点数
+            cx_size = float(position["cx_symbol"]) if position["cx_side"] is not None else 0  # 获取CoinEx仓位大小
             
             # 平仓方向与开仓方向相反
-            bp_close_side = "SELL" if bp_side == "BUY" else "BUY"
-            hl_close_side = "SELL" if hl_side == "BUY" else "BUY"
+            bp_close_side = "SELL" if bp_side == "BUY" else "BUY" if bp_side else None
+            hl_close_side = "SELL" if hl_side == "BUY" else "BUY" if hl_side else None
+            cx_close_side = "SELL" if cx_side == "BUY" else "BUY" if cx_side else None  # CoinEx平仓方向
             
             message = (
-                f"平仓方向: BP {bp_close_side} {bp_size} {bp_symbol}, "
-                f"HL {hl_close_side} {hl_size} {hl_symbol}"
+                f"平仓方向: "
             )
+            if bp_side:
+                message += f"BP {bp_close_side} {bp_size} {bp_symbol}, "
+            if hl_side:
+                message += f"HL {hl_close_side} {hl_size} {hl_symbol}, "
+            if cx_side:
+                message += f"CX {cx_close_side} {cx_size} {cx_symbol}"
+
             self.logger.info(message)
             self.display_manager.add_order_message(message)
             
@@ -1673,17 +2377,33 @@ class ArbitrageEngine:
             hl_price = data["hyperliquid"]["price"]
             bp_funding = data["backpack"]["funding_rate"]
             hl_funding = data["hyperliquid"]["funding_rate"] * 8  # 调整为8小时周期
+
+            # 获取CoinEx价格和资金费率
+            cx_price = None
+            cx_funding = None
+            if "coinex" in data:
+                cx_price = data["coinex"]["price"]
+                cx_funding = data["coinex"]["funding_rate"]
             
-            if not bp_price:
-                message = f"无法获取{bp_symbol}的当前价格，平仓失败"
+            if (bp_side and not bp_price) or (hl_side and not hl_price) or (cx_side and not cx_price):
+                missing_exchange = []
+                if bp_side and not bp_price:
+                    missing_exchange.append(f"Backpack({bp_symbol})")
+                if hl_side and not hl_price:
+                    missing_exchange.append(f"Hyperliquid({hl_symbol})")
+                if cx_side and not cx_price:
+                    missing_exchange.append(f"CoinEx({cx_symbol})")
+                    
+                message = f"无法获取{', '.join(missing_exchange)}的当前价格，平仓失败"
                 self.logger.error(message)
                 self.display_manager.add_order_message(message)
                 return False
 
             # 获取交易前的持仓状态
             self.logger.info(f"获取{symbol}平仓前的持仓状态")
-            pre_bp_positions = await self.backpack_api.get_positions()
-            pre_hl_positions = await self.hyperliquid_api.get_positions()
+            pre_bp_positions = await self.backpack_api.get_positions() if bp_side else {}
+            pre_hl_positions = await self.hyperliquid_api.get_positions() if hl_side else {}
+            pre_cx_positions = await self.coinex_api.get_positions() if cx_side else {}
 
             # 记录平仓前的持仓状态
             pre_bp_position = None
@@ -1698,16 +2418,39 @@ class ArbitrageEngine:
                     pre_hl_position = pos
                     break
 
+            pre_cx_position = None
+            if cx_side:
+                for pos in pre_cx_positions.values():
+                    if pos.get("base_symbol") == symbol:
+                        pre_cx_position = pos
+                        break
+
             self.logger.info(
-                f"平仓前持仓: BP {bp_symbol}={pre_bp_position}, HL {hl_symbol}={pre_hl_position}")
+                f"平仓前持仓: "
+                f"BP {bp_symbol}={pre_bp_position if bp_side else 'N/A'}, "
+                f"HL {hl_symbol}={pre_hl_position if hl_side else 'N/A'}, "
+                f"CX {cx_symbol}={pre_cx_position if cx_side else 'N/A'}"
+            )
 
-            # 如果任一交易所没有持仓，则无需平仓
-            if pre_bp_position is None:
+            # 检查是否有持仓需要平仓
+            if bp_side and pre_bp_position is None:
                 self.logger.warning(f"Backpack没有{bp_symbol}的持仓，无需平仓")
-                return False
+                bp_side = None
+                bp_close_side = None
 
-            if pre_hl_position is None:
+            if hl_side and pre_hl_position is None:
                 self.logger.warning(f"Hyperliquid没有{hl_symbol}的持仓，无需平仓")
+                hl_side = None
+                hl_close_side = None
+                
+            if cx_side and pre_cx_position is None:
+                self.logger.warning(f"CoinEx没有{cx_symbol}的持仓，无需平仓")
+                cx_side = None
+                cx_close_side = None
+
+            # 如果所有交易所都没有持仓，则无需平仓
+            if not bp_side and not hl_side and not cx_side:
+                self.logger.warning(f"所有交易所都没有{symbol}的持仓，无需平仓")
                 return False
 
             # 根据买卖方向调整价格确保快速成交
@@ -1715,83 +2458,127 @@ class ArbitrageEngine:
             bp_limit_price = bp_price * bp_price_adjuster
 
             # 根据tick_size调整价格
-            bp_limit_price = round(bp_limit_price / tick_size) * tick_size
-
-            # 控制小数位数，确保不超过配置的精度
-            bp_limit_price = round(bp_limit_price, price_precision)
-
-            self.logger.info(
-                f"平仓价格计算: 原始价格={bp_price}, 调整系数={bp_price_adjuster}, "
-                f"调整后价格={bp_limit_price}, 精度={price_precision}, tick_size={tick_size}")
-
-            # 同时平仓
-            bp_order_task = asyncio.create_task(
-                self.backpack_api.place_order(
-                    symbol=bp_symbol,
-                    side=bp_close_side,
-                    size=float(bp_size),  # 确保size是浮点数
-                    price=None,  # 使用市价单简化操作
-                    order_type="MARKET"
+            if bp_limit_price:
+                bp_limit_price = round(bp_limit_price / tick_size) * tick_size
+                # 控制小数位数，确保不超过配置的精度
+                bp_limit_price = round(bp_limit_price, price_precision)
+                self.logger.info(
+                    f"平仓价格计算: 原始价格={bp_price}, 调整系数={bp_price_adjuster}, "
+                    f"调整后价格={bp_limit_price}, 精度={price_precision}, tick_size={tick_size}"
                 )
-            )
 
-            # 在Hyperliquid也使用市价单平仓
-            hl_order_task = asyncio.create_task(
-                self.hyperliquid_api.place_order(
-                    symbol=hl_symbol,
-                    side=hl_close_side,
-                    size=float(hl_size),  # 确保size是浮点数
-                    price=None,  # 价格会在API内部计算
-                    order_type="MARKET"  # 使用市价单简化操作
+            # 创建平仓任务列表
+            close_tasks = []
+
+            # Backpack平仓任务
+            if bp_side:
+                bp_order_task = asyncio.create_task(
+                    self.backpack_api.place_order(
+                        symbol=bp_symbol,
+                        side=bp_close_side,
+                        size=float(bp_size),  # 确保size是浮点数
+                        price=None,  # 使用市价单简化操作
+                        order_type="MARKET"
+                    )
                 )
-            )
+                close_tasks.append(("backpack", bp_order_task))
 
-            # 等待平仓结果
-            bp_result, hl_result = await asyncio.gather(
-                bp_order_task,
-                hl_order_task,
-                return_exceptions=True
-            )
+            # Hyperliquid平仓任务
+            if hl_side:
+                hl_order_task = asyncio.create_task(
+                    self.hyperliquid_api.place_order(
+                        symbol=hl_symbol,
+                        side=hl_close_side,
+                        size=float(hl_size),  # 确保size是浮点数
+                        price=None,  # 价格会在API内部计算
+                        order_type="MARKET"  # 使用市价单简化操作
+                    )
+                )
+                close_tasks.append(("hyperliquid", hl_order_task))
+                
+            # CoinEx平仓任务
+            if cx_side:
+                cx_order_task = asyncio.create_task(
+                    self.coinex_api.place_order(
+                        symbol=cx_symbol,
+                        side=cx_close_side,
+                        size=float(cx_size),  # 确保size是浮点数
+                        price=None,  # 使用市价单
+                        order_type="MARKET"
+                    )
+                )
+                close_tasks.append(("coinex", cx_order_task))
+
+            # 等待所有平仓任务完成
+            results = {}
+            for exchange, task in close_tasks:
+                try:
+                    result = await task
+                    results[exchange] = result
+                except Exception as e:
+                    results[exchange] = e
+                    self.logger.error(f"{exchange}平仓订单异常: {e}")
 
             # 检查平仓结果
-            bp_success = not isinstance(bp_result, Exception) and not (
-                isinstance(bp_result, dict) and bp_result.get("error"))
+            success_status = {}
+            
+            # 检查Backpack平仓结果
+            if "backpack" in results:
+                bp_result = results["backpack"]
+                bp_success = not isinstance(bp_result, Exception) and not (
+                    isinstance(bp_result, dict) and bp_result.get("error"))
+                success_status["backpack"] = bp_success
+                
+                if bp_success:
+                    self.logger.info(f"Backpack平仓订单成功: {bp_result}")
+                else:
+                    self.logger.error(f"Backpack平仓订单失败: {bp_result}")
 
-            # 增强的Hyperliquid订单成功检查逻辑
-            hl_success = False
-            if not isinstance(hl_result, Exception):
-                if isinstance(hl_result, dict):
-                    # 检查直接的success标志
-                    if hl_result.get("success", False):
-                        hl_success = True
-                        hl_order_id = hl_result.get("order_id", "未知")
-                        self.logger.info(
-                            f"Hyperliquid平仓订单成功，订单ID: {hl_order_id}")
-
-                        # 检查订单是否已立即成交
-                        if hl_result.get("status") == "filled":
-                            self.logger.info(
-                                f"Hyperliquid平仓订单已立即成交，均价: {hl_result.get('price', '未知')}")
-
-                    # 检查是否包含filled状态
-                    elif "raw_response" in hl_result:
-                        raw_response = hl_result["raw_response"]
-                        raw_str = json.dumps(raw_response)
-
-                        if "filled" in raw_str:
-                            self.logger.info("检测到平仓订单可能已成交")
+            # 检查Hyperliquid平仓结果
+            if "hyperliquid" in results:
+                hl_result = results["hyperliquid"]
+                hl_success = False
+                if not isinstance(hl_result, Exception):
+                    if isinstance(hl_result, dict):
+                        # 检查直接的success标志
+                        if hl_result.get("success", False):
                             hl_success = True
+                            hl_order_id = hl_result.get("order_id", "未知")
+                            self.logger.info(
+                                f"Hyperliquid平仓订单成功，订单ID: {hl_order_id}")
 
-            # 日志记录订单结果
-            if bp_success:
-                self.logger.info(f"Backpack平仓订单成功: {bp_result}")
-            else:
-                self.logger.error(f"Backpack平仓订单失败: {bp_result}")
+                            # 检查订单是否已立即成交
+                            if hl_result.get("status") == "filled":
+                                self.logger.info(
+                                    f"Hyperliquid平仓订单已立即成交，均价: {hl_result.get('price', '未知')}")
 
-            if hl_success:
-                self.logger.info(f"Hyperliquid平仓订单成功")
-            else:
-                self.logger.error(f"Hyperliquid平仓订单失败: {hl_result}")
+                        # 检查是否包含filled状态
+                        elif "raw_response" in hl_result:
+                            raw_response = hl_result["raw_response"]
+                            raw_str = json.dumps(raw_response)
+
+                            if "filled" in raw_str:
+                                self.logger.info("检测到平仓订单可能已成交")
+                                hl_success = True
+                                
+                success_status["hyperliquid"] = hl_success
+                
+                if hl_success:
+                    self.logger.info(f"Hyperliquid平仓订单成功")
+                else:
+                    self.logger.error(f"Hyperliquid平仓订单失败: {hl_result}")
+                    
+            # 检查CoinEx平仓结果
+            if "coinex" in results:
+                cx_result = results["coinex"]
+                cx_success = not isinstance(cx_result, Exception) and not (
+                    isinstance(cx_result, dict) and cx_result.get("error"))
+                success_status["coinex"] = cx_success
+                
+                if cx_success:
+                    self.logger.info(f"CoinEx平仓订单成功: {cx_result}")
+                else:
+                    self.logger.error(f"CoinEx平仓订单失败: {cx_result}")
 
             # ===== 验证持仓变化 =====
             # 等待3秒让交易所处理订单
@@ -1800,62 +2587,112 @@ class ArbitrageEngine:
 
             # 获取交易后的持仓状态
             self.logger.info(f"获取{symbol}平仓后的持仓状态")
-            post_bp_positions = await self.backpack_api.get_positions()
-            post_hl_positions = await self.hyperliquid_api.get_positions()
+            post_bp_positions = await self.backpack_api.get_positions() if bp_side else {}
+            post_hl_positions = await self.hyperliquid_api.get_positions() if hl_side else {}
+            post_cx_positions = await self.coinex_api.get_positions() if cx_side else {}
 
             # 记录平仓后的持仓状态
             post_bp_position = None
-            for pos in post_bp_positions.values():
-                if pos.get("symbol") == bp_symbol:
-                    post_bp_position = pos
-                    break
+            if bp_side:
+                for pos in post_bp_positions.values():
+                    if pos.get("symbol") == bp_symbol:
+                        post_bp_position = pos
+                        break
 
             post_hl_position = None
-            for pos in post_hl_positions.values():
-                if pos.get("symbol") == hl_symbol:
-                    post_hl_position = pos
-                    break
+            if hl_side:
+                for pos in post_hl_positions.values():
+                    if pos.get("symbol") == hl_symbol:
+                        post_hl_position = pos
+                        break
+                        
+            post_cx_position = None
+            if cx_side:
+                for pos in post_cx_positions.values():
+                    if pos.get("base_symbol") == symbol:
+                        post_cx_position = pos
+                        break
 
             self.logger.info(
-                f"平仓后持仓: BP {bp_symbol}={post_bp_position}, HL {hl_symbol}={post_hl_position}")
+                f"平仓后持仓: "
+                f"BP {bp_symbol}={post_bp_position if bp_side else 'N/A'}, "
+                f"HL {hl_symbol}={post_hl_position if hl_side else 'N/A'}, "
+                f"CX {cx_symbol}={post_cx_position if cx_side else 'N/A'}"
+            )
 
             # 验证持仓变化
-            bp_position_closed = False
-            hl_position_closed = False
+            position_closed = {}
 
             # 检查Backpack持仓变化
-            if pre_bp_position is not None and post_bp_position is None:
-                # 持仓已完全平掉
-                bp_position_closed = True
-                self.logger.info(f"Backpack成功平掉{bp_symbol}全部持仓")
-            elif pre_bp_position is not None and post_bp_position is not None:
-                # 检查持仓大小是否变化
-                pre_size = float(pre_bp_position.get("quantity", 0))
-                post_size = float(post_bp_position.get("quantity", 0))
-                if pre_size > 0 and (
-                        pre_size - post_size) / pre_size >= 0.9:  # 平掉了90%以上的持仓
-                    bp_position_closed = True
-                    self.logger.info(
-                        f"Backpack {bp_symbol}持仓量显著减少: {pre_size} -> {post_size}")
+            # 检查Backpack持仓变化
+            if bp_side:
+                if pre_bp_position is not None and post_bp_position is None:
+                    # 持仓已完全平掉
+                    position_closed["backpack"] = True
+                    self.logger.info(f"Backpack成功平掉{bp_symbol}全部持仓")
+                elif pre_bp_position is not None and post_bp_position is not None:
+                    # 检查持仓大小是否变化
+                    pre_size = float(pre_bp_position.get("quantity", 0))
+                    post_size = float(post_bp_position.get("quantity", 0))
+                    if pre_size > 0 and (
+                            pre_size - post_size) / pre_size >= 0.9:  # 平掉了90%以上的持仓
+                        position_closed["backpack"] = True
+                        self.logger.info(
+                            f"Backpack {bp_symbol}持仓量显著减少: {pre_size} -> {post_size}")
+                    else:
+                        position_closed["backpack"] = False
+                else:
+                    position_closed["backpack"] = False
 
             # 检查Hyperliquid持仓变化
-            if pre_hl_position is not None and post_hl_position is None:
-                # 持仓已完全平掉
-                hl_position_closed = True
-                self.logger.info(f"Hyperliquid成功平掉{hl_symbol}全部持仓")
-            elif pre_hl_position is not None and post_hl_position is not None:
-                # 检查持仓大小是否变化
-                pre_size = float(pre_hl_position.get("size", 0))
-                post_size = float(post_hl_position.get("size", 0))
-                if pre_size > 0 and (
-                        pre_size - post_size) / pre_size >= 0.9:  # 平掉了90%以上的持仓
-                    hl_position_closed = True
-                    self.logger.info(
-                        f"Hyperliquid {hl_symbol}持仓量显著减少: {pre_size} -> {post_size}")
+            if hl_side:
+                if pre_hl_position is not None and post_hl_position is None:
+                    # 持仓已完全平掉
+                    position_closed["hyperliquid"] = True
+                    self.logger.info(f"Hyperliquid成功平掉{hl_symbol}全部持仓")
+                elif pre_hl_position is not None and post_hl_position is not None:
+                    # 检查持仓大小是否变化
+                    pre_size = float(pre_hl_position.get("size", 0))
+                    post_size = float(post_hl_position.get("size", 0))
+                    if pre_size > 0 and (
+                            pre_size - post_size) / pre_size >= 0.9:  # 平掉了90%以上的持仓
+                        position_closed["hyperliquid"] = True
+                        self.logger.info(
+                            f"Hyperliquid {hl_symbol}持仓量显著减少: {pre_size} -> {post_size}")
+                    else:
+                        position_closed["hyperliquid"] = False
+                else:
+                    position_closed["hyperliquid"] = False
+                    
+            # 检查CoinEx持仓变化
+            if cx_side:
+                if pre_cx_position is not None and post_cx_position is None:
+                    # 持仓已完全平掉
+                    position_closed["coinex"] = True
+                    self.logger.info(f"CoinEx成功平掉{cx_symbol}全部持仓")
+                elif pre_cx_position is not None and post_cx_position is not None:
+                    # 检查持仓大小是否变化
+                    pre_size = float(pre_cx_position.get("size", 0))
+                    post_size = float(post_cx_position.get("size", 0))
+                    if pre_size > 0 and (
+                            pre_size - post_size) / pre_size >= 0.9:  # 平掉了90%以上的持仓
+                        position_closed["coinex"] = True
+                        self.logger.info(
+                            f"CoinEx {cx_symbol}持仓量显著减少: {pre_size} -> {post_size}")
+                    else:
+                        position_closed["coinex"] = False
+                else:
+                    position_closed["coinex"] = False
 
             # 根据持仓变化情况判断平仓成功与否
-            if bp_position_closed and hl_position_closed:
-                # 两个交易所都成功平仓
+            all_closed = True
+            for exchange in position_closed:
+                if not position_closed[exchange]:
+                    all_closed = False
+                    break
+                    
+            if all_closed and position_closed:
+                # 所有交易所都成功平仓
                 message = f"{symbol}平仓成功"
                 self.logger.info(message)
                 self.display_manager.add_order_message(message)
@@ -1866,12 +2703,15 @@ class ArbitrageEngine:
                 self._save_position_snapshot(
                     symbol=symbol,
                     action="close",
-                    bp_position=bp_position,
-                    hl_position=hl_position,
+                    bp_position=pre_bp_position if bp_side else None,
+                    hl_position=pre_hl_position if hl_side else None,
+                    cx_position=pre_cx_position if cx_side else None,  # 添加CoinEx持仓
                     bp_price=bp_price,
                     hl_price=hl_price,
+                    cx_price=cx_price,  # 添加CoinEx价格
                     bp_funding=bp_funding,
-                    hl_funding=hl_funding
+                    hl_funding=hl_funding,
+                    cx_funding=cx_funding  # 添加CoinEx资金费率
                 )
                 
                 # 清除方向记录
@@ -1893,25 +2733,50 @@ class ArbitrageEngine:
                 
                 # 发送通知
                 if self.alerter:
-                    self.alerter.send_order_notification(
-                        symbol=symbol,
-                        action="平仓",
-                        quantity=bp_size,
-                        price=bp_price,
-                        side="多" if bp_close_side == "BUY" else "空",
-                        exchange="Backpack"
-                    )
+                    # 为每个交易所发送通知
+                    if bp_side:
+                        self.alerter.send_order_notification(
+                            symbol=symbol,
+                            action="平仓",
+                            quantity=bp_size,
+                            price=bp_price,
+                            side="多" if bp_close_side == "BUY" else "空",
+                            exchange="Backpack"
+                        )
+                    if hl_side:
+                        self.alerter.send_order_notification(
+                            symbol=symbol,
+                            action="平仓",
+                            quantity=hl_size,
+                            price=hl_price,
+                            side="多" if hl_close_side == "BUY" else "空",
+                            exchange="Hyperliquid"
+                        )
+                    if cx_side:
+                        self.alerter.send_order_notification(
+                            symbol=symbol,
+                            action="平仓",
+                            quantity=cx_size,
+                            price=cx_price,
+                            side="多" if cx_close_side == "BUY" else "空",
+                            exchange="CoinEx"
+                        )
                 return True
-            elif (not bp_position_closed and hl_position_closed) or (bp_position_closed and not hl_position_closed):
-                # 单边平仓成功，可能需要尝试再次平掉另一边
-                self.logger.warning(f"{symbol}单边平仓成功，另一边可能需要手动处理")
+            elif position_closed:
+                # 部分交易所平仓成功，可能需要尝试再次平掉其他交易所
+                failed_exchanges = []
+                for exchange in position_closed:
+                    if not position_closed[exchange]:
+                        failed_exchanges.append(exchange)
+                
+                self.logger.warning(f"{symbol}部分平仓成功，{', '.join(failed_exchanges)}可能需要手动处理")
                 # 更新订单统计
                 self.display_manager.update_order_stats("close", False)
                 # 这里可以添加重试逻辑
                 return False
             else:
-                # 两个交易所都未成功平仓
-                self.logger.error(f"{symbol}在两个交易所均未成功平仓")
+                # 所有交易所都未成功平仓
+                self.logger.error(f"{symbol}在所有交易所均未成功平仓")
                 # 更新订单统计
                 self.display_manager.update_order_stats("close", False)
                 return False
@@ -1923,7 +2788,7 @@ class ArbitrageEngine:
             return False
 
     def _update_position_direction_info(
-            self, market_data, bp_positions, hl_positions):
+            self, market_data, bp_positions, hl_positions,cx_positions=None):
         """
         更新市场数据中的持仓方向信息
 
@@ -1931,29 +2796,61 @@ class ArbitrageEngine:
             market_data: 市场数据字典
             bp_positions: Backpack持仓信息
             hl_positions: Hyperliquid持仓信息
+            cx_positions: CoinEx持仓信息（可选）
 
         Returns:
             更新后的市场数据字典
         """
+
+        if cx_positions is None:
+            cx_positions = {}
+
         for symbol in market_data:
             bp_symbol = get_backpack_symbol(symbol)
+            hl_symbol = symbol
+            cx_symbol = symbol
 
-            # 检查BP持仓
-            if bp_symbol in bp_positions:
-                # 获取BP持仓方向
-                bp_position = bp_positions[bp_symbol]
-                market_data[symbol]["bp_position_side"] = bp_position.get(
-                    "side")
-            else:
-                market_data[symbol]["bp_position_side"] = None
+            # 初始化持仓方向信息
+            bp_side = None
+            hl_side = None
+            cx_side = None
 
-            # 检查HL持仓
-            if symbol in hl_positions:
-                # 获取HL持仓方向
-                hl_position = hl_positions[symbol]
-                market_data[symbol]["hl_position_side"] = hl_position.get(
-                    "side")
-            else:
-                market_data[symbol]["hl_position_side"] = None
+            # 检查Backpack持仓
+            for pos_symbol, pos_data in bp_positions.items():
+                if pos_symbol == bp_symbol:
+                    bp_side = pos_data.get("side")
+                    break
+            
+            # 检查Hyperliquid持仓
+            for pos_symbol, pos_data in hl_positions.items():
+                if pos_symbol == hl_symbol:
+                    hl_side = pos_data.get("side")
+                    break
+                    
+            # 检查CoinEx持仓
+            for pos_symbol, pos_data in cx_positions.items():
+                if pos_symbol == cx_symbol:
+                    cx_side = pos_data.get("side")
+                    break
+
+            # 更新市场数据中的持仓方向信息
+            market_data[symbol]["bp_side"] = bp_side
+            market_data[symbol]["hl_side"] = hl_side
+            market_data[symbol]["cx_side"] = cx_side  # 添加CoinEx持仓方向
+            
+            # 检查是否有持仓
+            has_position = bp_side is not None or hl_side is not None or cx_side is not None
+            market_data[symbol]["position"] = has_position
+            
+            # 如果有持仓，记录持仓方向
+            if has_position:
+                self.position_directions[symbol] = {
+                    "bp_side": bp_side,
+                    "hl_side": hl_side,
+                    "cx_side": cx_side  # 添加CoinEx持仓方向
+                }
+            elif symbol in self.position_directions:
+                # 如果没有持仓但之前有记录，则删除记录
+                del self.position_directions[symbol]
 
         return market_data

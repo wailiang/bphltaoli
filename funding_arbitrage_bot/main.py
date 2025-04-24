@@ -19,6 +19,7 @@ try:
     # 首先尝试从包内导入
     from funding_arbitrage_bot.exchanges.backpack_api import BackpackAPI
     from funding_arbitrage_bot.exchanges.hyperliquid_api import HyperliquidAPI
+    from funding_arbitrage_bot.exchanges.coinex_api import CoinExAPI
     from funding_arbitrage_bot.core.arbitrage_engine import ArbitrageEngine
     from funding_arbitrage_bot.utils.helpers import load_config
     from funding_arbitrage_bot.utils.logger import setup_logger
@@ -27,6 +28,7 @@ except ImportError:
         # 如果从包内导入失败，尝试相对导入
         from exchanges.backpack_api import BackpackAPI
         from exchanges.hyperliquid_api import HyperliquidAPI
+        from exchanges.coinex_api import CoinExAPI
         from core.arbitrage_engine import ArbitrageEngine
         from utils.helpers import load_config
         from utils.logger import setup_logger
@@ -40,6 +42,7 @@ except ImportError:
         # 再次尝试相对导入
         from exchanges.backpack_api import BackpackAPI
         from exchanges.hyperliquid_api import HyperliquidAPI
+        from exchanges.coinex_api import CoinExAPI
         from core.arbitrage_engine import ArbitrageEngine
         from utils.helpers import load_config
         from utils.logger import setup_logger
@@ -86,14 +89,27 @@ async def run_bot(config: Dict[str, Any], test_mode: bool = False):
         config=config
     )
     print("Hyperliquid API初始化完成")
+
+    # 初始化CoinEx API
+    print("正在初始化CoinEx API...")
+    cx_config = exchange_config.get("coinex", {})
+    coinex_api = CoinExAPI(
+        api_key=cx_config.get("api_key", ""),
+        api_secret=cx_config.get("api_secret", ""),
+        logger=logger,
+        config=config
+    )
+    print("CoinEx API初始化完成")
     
     # 创建套利引擎实例 - 传递日志配置
     arbitrage_engine = ArbitrageEngine(
         config=config,
         backpack_api=backpack_api,
         hyperliquid_api=hyperliquid_api,
+        coinex_api=coinex_api,
         logger=logger
     )
+    
     
     # 测试模式：仅测试API连接
     if test_mode:
@@ -110,9 +126,13 @@ async def run_bot(config: Dict[str, Any], test_mode: bool = False):
             hl_positions = await hyperliquid_api.get_positions()
             print(f"Hyperliquid持仓: {hl_positions}")
             
+            # 测试CoinEx API
+            print("测试CoinEx API...")
+            cx_positions = await coinex_api.get_positions()
+            print(f"CoinEx持仓信息: {cx_positions}")
+            
             print("API测试成功!")
             return
-        
         except Exception as e:
             print(f"API测试失败: {e}")
             logger.error(f"API测试失败: {e}")
@@ -164,6 +184,7 @@ async def run_bot(config: Dict[str, Any], test_mode: bool = False):
     print("正在清理资源...")
     await backpack_api.close()
     await hyperliquid_api.close()
+    await coinex_api.close()
     
     print("套利机器人已停止")
 
